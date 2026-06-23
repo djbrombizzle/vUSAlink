@@ -39,6 +39,19 @@ will load but every hub request will fail with a CORS error in the browser conso
 
 ---
 
+## Using it (quick tour)
+
+-----------------------------------------------------------
+- Aircraft logging on to CPDLC are accepted automatically.
+- Click an ALTITUDE to issue a climb/descend/maintain.
+- Click the ROUTE to send a direct-to or crossing restriction.
+- Click the FLIGHT ID to hand off (voice CONTACT, or CPDLC HANDOVER).
+- The SOUND button toggles the logon/message chimes.
+- The EDST button switches to the authentic ERAM EDST look.
+
+
+
+
 ## What a controller does
 
 1. Open the link.
