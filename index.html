@@ -20,6 +20,11 @@
   .field{display:flex;align-items:center;gap:6px}
   .field input{background:#000;border:1px solid #555;color:var(--fg);padding:2px 6px;font-size:13px}
   .tb-btn{background:#1a1a1a;border:1px solid #555;color:var(--fg);padding:2px 10px}
+  .chk{display:flex;align-items:center;gap:5px;color:var(--fg-dim);cursor:pointer;user-select:none;white-space:nowrap}
+  .chk input{cursor:pointer}
+  .badge{padding:2px 9px;border:1px solid #555;border-radius:2px;font-weight:bold;letter-spacing:.5px;font-size:12px}
+  .badge.view{background:#3a2e10;color:#e8c469;border-color:#8a6320}
+  .badge.ctrl{background:#10331a;color:#7fe6a0;border-color:#2f7347}
   .tb-btn:hover{background:#262626}
   #status{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--fg-dim)}
   .sep{color:#444}
@@ -253,12 +258,15 @@ body.edst #edstbar{display:block;background:#000;border-bottom:1px solid #333;
 </div>
 
 <div id="toolbar">
+  <div class="field" id="viewArtccField"><label>VIEW ARTCC</label><input id="viewArtcc" size="6" autocomplete="off" placeholder="KZJX"></div>
+  <label class="chk"><input type="checkbox" id="showAll"> SHOW ALL A/C</label>
   <div class="field"><label>ADD/FIND</label><input id="find" size="12" autocomplete="off" placeholder="callsign"></div>
   <button class="tb-btn" id="btnAdd">+ ADD A/C</button>
   <button class="tb-btn" id="btnRefresh">REFRESH</button>
   <button class="tb-btn" id="btnSettings">SETTINGS</button>
   <button class="tb-btn" id="btnSound">SOUND ON</button>
   <button class="tb-btn" id="btnEdst">EDST</button>
+  <span id="modeBadge" class="badge view">VIEW ONLY</span>
   <div id="status">
     <span class="dot" id="vatDot"></span><span id="vatText">VATSIM idle</span>
     <span class="sep">|</span>
@@ -420,7 +428,7 @@ const DEFAULT_HUB_URL='https://web-production-3d9fe.up.railway.app';   // shared
 // server (e.g. GitHub Pages), there is no /api proxy — talk to the hub directly and
 // run hub-only (solo/direct-Hoppie needs the local server a browser can't provide).
 const WEB_ONLY=!/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(location.hostname)&&location.protocol!=='file:';
-let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',muted:false,logCollapsed:false,edst:false});
+let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',muted:false,logCollapsed:false,edst:false,viewArtcc:'',showAll:false});
 if(WEB_ONLY&&!settings.hubUrl)settings.hubUrl=DEFAULT_HUB_URL;
 let SID=LS.get('vedst_sid','');
 if(!SID){SID=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():(Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));LS.set('vedst_sid',SID);}
@@ -453,7 +461,9 @@ let sortState={key:null,dir:1};
 function gsOf(a){const m=(a.hs||'').match(/(\d+)/);return m?+m[1]:0;}
 function statusScore(a){return (msgAlert.has(a.cs)?4:0)+(handoffPending.has(a.cs)?2:0)+(connected.has(a.cs)?1:0);}
 function displayList(){
-  const list=board().slice();const k=sortState.key;if(!k)return list;
+  let list=board().slice();
+  if(!settings.showAll)list=list.filter(a=>connected.has(a.cs));   // GREEN / on KUSA only
+  const k=sortState.key;if(!k)return list;
   const acc={lmh:a=>statusScore(a),cs:a=>a.cs||'',type:a=>a.type||'',alt:a=>a.alt||0,gs:a=>gsOf(a),squawk:a=>a.squawk||'',route:a=>a.route||''}[k];
   if(!acc)return list;
   list.sort((x,y)=>{const A=acc(x),B=acc(y);return A<B?-sortState.dir:A>B?sortState.dir:0;});
@@ -487,6 +497,9 @@ function parsePacket(pk){const p=pk.split('/');if(p[1]!=='data2')return null;
 function configured(){return settings.logon&&settings.station;}
 let hubArtcc='';   // ARTCC the hub resolved from our VATSIM position (hub mode)
 function hubMode(){return HUB_FEATURE&&!!(settings.hubUrl&&settings.cid);}
+function canControl(){return configured()||(hubMode()&&verifyOK);}   // solo OR verified hub
+function monitorMode(){return !hubMode()&&!configured();}     // VIEW ONLY (no position signed in)
+function monitorArtcc(){return (settings.viewArtcc||'').trim().toUpperCase();}
 function airspaceId(){return (hubMode()?hubArtcc:(settings.airspace||settings.station||'')).trim().toUpperCase();}
 const HUB_EP={'/api/vatsim':'/hub/vatsim','/api/poll':'/hub/poll','/api/send':'/hub/send'};
 function hubBase(){return (settings.hubUrl||DEFAULT_HUB_URL).replace(/\/+$/,'');}
@@ -589,7 +602,37 @@ function pushMessage(cs,text){
 }
 
 //============================================================ VATSIM
+let feedSince=0, feedArtcc='';
+function renderFeed(msgs,evtId){
+  (msgs||[]).forEach(m=>{
+    const who=m.kind==='up'?`${m.frm} \u2192 ${m.to}`:`${m.frm}`;
+    logMsg(m.kind==='up'?'out':'in',who,m.msg);
+  });
+  if(evtId!=null)feedSince=evtId;
+}
+function menusOpen(){return !altmenu.classList.contains('hidden')||!routemenu.classList.contains('hidden')
+  ||!handoffpop.classList.contains('hidden')||!hdgmenu.classList.contains('hidden')||!spdmenu.classList.contains('hidden');}
+async function refreshMonitor(force){
+  const art=monitorArtcc();
+  if(!art){liveFlights=[];connected.clear();renderBoard();
+    setVat('','VIEW ONLY \u2014 type an ARTCC above (e.g. KZJX)');return;}
+  if(art!==feedArtcc){feedArtcc=art;feedSince=0;log.innerHTML='';}
+  if(!force&&menusOpen())return;
+  setVat('busy','VIEW '+art+' \u2026');
+  try{
+    const d=await (await fetch(hubBase()+'/hub/monitor',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({airspace:art,since:feedSince})})).json();
+    if(!d.ok){setVat('err',d.error||'view error');return;}
+    liveFlights=(d.flights||[]).map(mapLive);facilities=[];
+    connected.clear();(d.connected||[]).forEach(c=>connected.add(c));
+    renderFeed(d.messages,d.evtId);
+    setVat('on',`VIEW ${art} \u00b7 ${connected.size} on KUSA \u00b7 ${liveFlights.length} a/c`);
+    renderBoard();
+  }catch(e){setVat('err','hub unreachable');}
+}
 async function refreshVatsim(force){
+  if(monitorMode())return refreshMonitor(force);
   const hub=hubMode();
   const airspace=airspaceId();
   if(!hub&&!airspace)return;
@@ -623,7 +666,7 @@ function mapLive(f){
     route:full,_routeRaw:f.route||'',routeFixes:f.routeFixes||null,cat:f.category,dep:f.dep,arr:f.arr,source:'live'};
 }
 function scheduleVatsim(){if(vatsimTimer)clearInterval(vatsimTimer);
-  vatsimTimer=setInterval(()=>refreshVatsim(false),30000);}
+  vatsimTimer=setInterval(()=>refreshVatsim(false),monitorMode()?12000:30000);}
 
 //============================================================ board
 const rows=document.getElementById('rows');
@@ -673,7 +716,15 @@ function renderRowEdst(a,idx){
         +`<td class="ehs hs-cell">${hsCellHtml(a,idx)}</td><td class="ehold"></td>`
         +`<td class="route-cell" data-route="${idx}" style="${rcol}">${a.route||''}</td>`;
 }
+function updateMode(){
+  const badge=document.getElementById('modeBadge'),field=document.getElementById('viewArtccField');
+  if(!badge)return;
+  if(canControl()){badge.textContent='CONTROLLING';badge.className='badge ctrl';if(field)field.style.display='none';}
+  else if(hubMode()){badge.textContent='VERIFY TO CONTROL';badge.className='badge view';if(field)field.style.display='none';}
+  else{badge.textContent='VIEW ONLY';badge.className='badge view';if(field)field.style.display='';}
+}
 function renderBoard(){
+  updateMode();
   const list=displayList();rows.innerHTML='';
   const edst=document.body.classList.contains('edst');
   list.forEach((a,idx)=>{
@@ -1027,7 +1078,7 @@ document.getElementById('setSave').onclick=()=>{
   const op=configured()||hubMode();
   setHoppie(false,op?'connecting...':'not configured');
   if(op){burstUntil=Date.now()+30000;pollOnce();schedulePoll();}
-  if(airspaceId()||hubMode()){refreshVatsim(true);scheduleVatsim();}
+  refreshVatsim(true);scheduleVatsim();
 };
 
 //============================================================ add / find / refresh
@@ -1043,6 +1094,15 @@ document.getElementById('afSave').onclick=()=>{
 };
 function afv(id){return document.getElementById(id).value.trim();}
 document.getElementById('btnRefresh').onclick=()=>refreshVatsim(true);
+(function(){
+  const va=document.getElementById('viewArtcc');va.value=settings.viewArtcc||'';
+  const go=()=>{settings.viewArtcc=va.value.trim().toUpperCase();va.value=settings.viewArtcc;persist();
+    refreshVatsim(true);scheduleVatsim();};
+  va.addEventListener('change',go);
+  va.addEventListener('keydown',e=>{if(e.key==='Enter'){va.blur();go();}});
+  const sa=document.getElementById('showAll');sa.checked=!!settings.showAll;
+  sa.addEventListener('change',()=>{settings.showAll=sa.checked;persist();renderBoard();});
+})();
 document.getElementById('find').addEventListener('keydown',e=>{
   if(e.key!=='Enter')return;const q=e.target.value.trim().toUpperCase();if(!q)return;
   const row=[...rows.children].find(tr=>tr.querySelector('.fid')?.textContent.includes(q));
@@ -1065,6 +1125,7 @@ document.querySelector('#board thead').addEventListener('click',e=>{
 
 //============================================================ board clicks
 rows.addEventListener('click',e=>{
+  if(!canControl())return;            // VIEW ONLY: board is read-only until verified
   const mbox=e.target.closest('[data-msg]');
   const fid=e.target.closest('[data-fid]');
   const alt=e.target.closest('.alt-cell');
@@ -1157,11 +1218,10 @@ if(WEB_ONLY){            // website build: hub-only, hub URL pre-set to the shar
   const ur=document.getElementById('hubUrlRow');if(ur)ur.style.display='none';
   const hdr=document.getElementById('hubHdr');if(hdr){hdr.textContent='Connect to the shared KUSA hub';hdr.style.borderTop='none';hdr.style.marginTop='0';}
 }
-setHoppie(false,(configured()||hubMode())?'connecting...':'CPDLC not configured \u2014 open SETTINGS');
-setVat('',(airspaceId()||hubMode())?('VATSIM '+(airspaceId()||'hub')):'VATSIM idle \u2014 set station');
+setHoppie(false,(configured()||hubMode())?'connecting...':'VIEW ONLY \u2014 monitoring, not signed in');
+setVat('',(airspaceId()||hubMode())?('VATSIM '+(airspaceId()||'hub')):'VIEW ONLY \u2014 type an ARTCC to watch');
 if(configured()||hubMode()){pollOnce();}schedulePoll();
-if(airspaceId()||hubMode()){refreshVatsim(true);scheduleVatsim();}
-if(WEB_ONLY&&!settings.cid)openSettings();   // first visit: prompt for CID
+refreshVatsim(true);scheduleVatsim();
 </script>
 </body>
 </html>
