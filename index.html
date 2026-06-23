@@ -404,8 +404,6 @@ body.edst #edstbar{display:block;background:#000;border-bottom:1px solid #333;
       <div class="frow"><label>My VATSIM CID</label>
         <input id="setCid" autocomplete="off" inputmode="numeric" placeholder="1234567">
         <div class="hint">Your sector is taken from your live VATSIM position \u2014 you must be controlling a center (e.g. JAX_CTR) for the hub to serve you.</div></div>
-      <div class="frow"><label>Network password (only if your hub requires one)</label>
-        <input id="setHubToken" type="password" autocomplete="off"></div>
       </div>
     </div>
     <div class="actions"><button class="tb-btn" id="setCancel">cancel</button><button class="tb-btn" id="setSave">save</button></div>
@@ -1014,7 +1012,6 @@ function openSettings(){
   document.getElementById('setStation').value=settings.station||'';
   document.getElementById('setAirspace').value=settings.airspace||'';
   document.getElementById('setHubUrl').value=settings.hubUrl||'';
-  document.getElementById('setHubToken').value=settings.hubToken||'';
   document.getElementById('setCid').value=settings.cid||'';
   scrim.classList.remove('hidden');
 }
@@ -1025,7 +1022,6 @@ document.getElementById('setSave').onclick=()=>{
   settings.station=document.getElementById('setStation').value.trim().toUpperCase();
   settings.airspace=document.getElementById('setAirspace').value.trim().toUpperCase();
   settings.hubUrl=document.getElementById('setHubUrl').value.trim();
-  settings.hubToken=document.getElementById('setHubToken').value.trim();
   settings.cid=document.getElementById('setCid').value.trim();
   persist();scrim.classList.add('hidden');
   const op=configured()||hubMode();
