@@ -47,6 +47,13 @@
   .sbox.msgbox{cursor:pointer}
   .sbox.flash{animation:flash .8s steps(1) infinite;border-color:var(--alert)}
   @keyframes flash{0%,49%{background:var(--alert);color:#fff}50%,100%{background:transparent;color:var(--alert)}}
+  .wbox{display:inline-block;width:14px;height:14px;border:1px solid #4a4a4a;box-sizing:border-box;
+    text-align:center;line-height:13px;color:#000;font-size:10px;font-weight:bold;vertical-align:middle}
+  .wbox.flash{background:#fff;border-color:#fff;color:#000;animation:wflash .7s steps(1,start) infinite}
+  .wbox.solid{background:#fff;border-color:#fff}      /* muted: stays filled white */
+  .wbox.done{background:transparent;border-color:#fff} /* heard the alert: relaxes to outline */
+  @keyframes wflash{50%{background:transparent;color:transparent}}
+  body.edst .wbox{width:14px;height:14px}
   .fid{font-weight:bold;letter-spacing:.3px;cursor:pointer}
   .fid:hover{color:#fff;text-decoration:underline}
   .fid.conn{color:var(--green)}
@@ -290,6 +297,7 @@ body.edst #edstbar{display:block;background:#000;border-bottom:1px solid #333;
   <thead>
   <tr id="headClassic">
     <th data-key="lmh" data-label="L M H">L M H</th>
+    <th data-label="W">W</th>
     <th data-key="cs" data-label="FLIGHT ID">FLIGHT ID</th>
     <th data-key="type" data-label="TYPE">TYPE</th>
     <th data-key="alt" data-label="ALT">ALT</th>
@@ -298,7 +306,7 @@ body.edst #edstbar{display:block;background:#000;border-bottom:1px solid #333;
   </tr>
   <tr id="headEdst">
     <th class="eh-bk"><span class="gc"></span></th>
-    <th class="eh-al r">R</th><th class="eh-al y">Y</th><th class="eh-al a">A</th>
+    <th class="eh-al r">R</th><th class="eh-al y">Y</th><th class="eh-al a">A</th><th class="eh-al w">W</th>
     <th data-key="cs" data-label="Flight ID">Flight ID</th>
     <th class="eh-pa">PA</th>
     <th class="eh-hot"></th>
@@ -314,7 +322,7 @@ body.edst #edstbar{display:block;background:#000;border-bottom:1px solid #333;
 </table>
 
 <div class="footnote">
-  Boxes: <b>L</b> logon (white = on CPDLC) &middot; <b>M</b> message (flashes red on incoming &mdash; click to read) &middot; <b>H</b> handoff (amber = pending).
+  Boxes: <b>L</b> logon (white = on CPDLC) &middot; <b>M</b> message (flashes red on incoming &mdash; click to read) &middot; <b>H</b> handoff (amber = pending) &middot; <b>W</b> WILCO (flashes white 120s + chime when a pilot WILCOs, then an outline).
   Click <b>FLIGHT ID</b> to hand off &middot; <b>ALT</b> for a level &middot; <b>ROUTE</b> for direct. Logons auto-accept.
 </div>
 
@@ -423,13 +431,14 @@ body.edst #edstbar{display:block;background:#000;border-bottom:1px solid #333;
 const LS={get:(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}},
           set:(k,v)=>localStorage.setItem(k,JSON.stringify(v))};
 const HUB_FEATURE=true;   // Shared HUB mode (KUSA) — approved by Hoppie owner
-const DEFAULT_HUB_URL='https://web-production-3d9fe.up.railway.app';   // shared KUSA hub
-// Website build: when this page is served from anywhere other than a local Python
-// server (e.g. GitHub Pages), there is no /api proxy — talk to the hub directly and
-// run hub-only (solo/direct-Hoppie needs the local server a browser can't provide).
-const WEB_ONLY=!/^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])$/i.test(location.hostname)&&location.protocol!=='file:';
+const DEFAULT_HUB_URL='https://web-production-3d9fe.up.railway.app';   // shared KUSA hub, baked in
+// This app is hub-only: every controller connects to the shared KUSA hub with just their
+// VATSIM CID. The hub URL is built in, so Settings only asks for the CID. (Solo/direct-Hoppie
+// is retired — a browser can't reach Hoppie directly, which is why the hub exists.)
+const WEB_ONLY=true;
 let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',muted:false,logCollapsed:false,edst:false,viewArtcc:'',showAll:false});
-if(WEB_ONLY&&!settings.hubUrl)settings.hubUrl=DEFAULT_HUB_URL;
+settings.hubUrl=DEFAULT_HUB_URL;          // always the shared hub (ignore any stale stored URL)
+settings.logon='';settings.station='';    // retire any stale solo credentials
 let SID=LS.get('vedst_sid','');
 if(!SID){SID=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():(Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));LS.set('vedst_sid',SID);}
 let minCounter=LS.get('vedst_min',1);
@@ -440,6 +449,7 @@ let facilities=[];                       // nearby online facilities (handoff ta
 const connected=new Set();               // L: on CPDLC
 let hubConnReady=false;                   // suppress logon chime on first hub poll
 const msgAlert=new Set();                // M: unread incoming
+const wilcoAt={};                        // W: cs -> timestamp(ms) of last WILCO
 const handoffPending=new Set();          // H: awaiting WILCO
 const handoffMin={};                     // cs -> MIN of CONTACT msg
 const altMin={}, rtMin={};               // cs -> MIN of last alt / route uplink
@@ -584,6 +594,7 @@ function handleResponse(cs,d,msg){
   logMsg('in',cs,'response: '+msg);
   const mrn=String(d.mrn);
   if(/WILCO/.test(msg)){
+    wilcoAt[cs]=Date.now();soundWilco();setTimeout(()=>renderBoard(),120000);  // flash 120s then relax
     if(handoffMin[cs]!=null&&mrn===String(handoffMin[cs])){
       connected.delete(cs);handoffPending.delete(cs);delete handoffMin[cs];
       logMsg('sys',cs,'handoff WILCO \u2014 logged off CPDLC');
@@ -675,6 +686,14 @@ function boxHtml(cs){
         +`<span class="sbox msgbox ${msgAlert.has(cs)?'flash':''}" data-msg="${cs}" title="message">M</span>`
         +`<span class="sbox ${handoffPending.has(cs)?'ho':''}" title="handoff">H</span>`;
 }
+function wilcoBoxHtml(cs){
+  const t=wilcoAt[cs];
+  if(t==null)return '<span class="wbox" title="WILCO"></span>';
+  if(Date.now()-t<120000)return '<span class="wbox flash" title="WILCO received">W</span>';
+  // after 120s: relaxes to an outline if the audio alert played; stays solid if muted
+  return settings.muted?'<span class="wbox solid" title="WILCO received (muted)"></span>'
+                       :'<span class="wbox done" title="WILCO received"></span>';
+}
 function altCellHtml(a){
   const asg=assigned[a.cs];
   if(asg!=null){
@@ -695,6 +714,7 @@ function hsCellHtml(a,idx){
 function renderRowClassic(a,idx){
   const rcol=routePending.has(a.cs)?'color:var(--green)':'';
   return `<td>${boxHtml(a.cs)}</td>
+    <td>${wilcoBoxHtml(a.cs)}</td>
     <td><span class="fid ${connected.has(a.cs)?'conn':''}" data-fid="${idx}">${connected.has(a.cs)?'+':''}${a.cs}</span></td>
     <td>${a.type||''}</td>
     <td class="alt-cell" data-alt="${idx}">${altCellHtml(a)}</td>
@@ -708,7 +728,7 @@ function renderRowEdst(a,idx){
   const abox=`<span class="abox ${handoffPending.has(a.cs)?'ho':''}" title="handoff"></span>`;
   const fid=`<span class="efid" data-fid="${idx}"><span class="acid">${a.cs}</span></span>`;
   const rcol=routePending.has(a.cs)?'color:var(--green)':'';
-  return `<td class="eh-bk">${bk}</td><td>${rbox}</td><td>${ybox}</td><td>${abox}</td>`
+  return `<td class="eh-bk">${bk}</td><td>${rbox}</td><td>${ybox}</td><td>${abox}</td><td>${wilcoBoxHtml(a.cs)}</td>`
         +`<td>${fid}</td><td><span class="smbox"></span></td><td><span class="smbox"></span></td>`
         +`<td class="etyp">${a.type||''}</td>`
         +`<td class="alt-cell" data-alt="${idx}">${altCellHtml(a)}</td>`
@@ -1158,6 +1178,7 @@ function beep(freq,dur,delay,vol,type){
 }
 function soundLogon(){if(settings.muted)return;ensureAudio();beep(660,0.12,0,0.40,'sine');beep(990,0.14,0.10,0.45,'sine');beep(1320,0.16,0.22,0.40,'sine');}   // loud rising 3-note chime
 function soundMessage(){if(settings.muted)return;ensureAudio();beep(520,0.14,0,0.16,'triangle');beep(520,0.14,0.17,0.16,'triangle');} // double alert
+function soundWilco(){if(settings.muted)return;ensureAudio();beep(784,0.12,0,0.36,'sine');beep(1047,0.15,0.10,0.40,'sine');} // rising WILCO chime
 ['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,ensureAudio,{once:true}));   // unlock on first interaction
 
 function updateSoundBtn(){document.getElementById('btnSound').textContent=settings.muted?'SOUND OFF':'SOUND ON';}
