@@ -553,10 +553,10 @@ async function sendCpdlc(to,ra,message,mrn){
   let finalMin=localMin;
   try{const res=await api('/api/send',{to,type:'cpdlc',packet});
     if(res&&res.needVerify){applyVerify({ok:false,code:res.verifyCode});
-      logMsg('err',to,'not verified \u2014 add '+(res.verifyCode||'code')+' to your controller info');}
-    else if(!res.ok)logMsg('err',to,'send failed: '+(res.error||'unknown'));
+      logMsg('err',to,'not verified \u2014 add '+(res.verifyCode||'code')+' to your controller info');return null;}
+    else if(!res||!res.ok){logMsg('err',to,'send failed: '+((res&&res.error)||'unknown'));return null;}
     else if(res.min!=null)finalMin=res.min;        // hub assigns the authoritative MIN
-  }catch(e){logMsg('err',to,'proxy error: '+e.message);}
+  }catch(e){logMsg('err',to,'proxy error: '+e.message);return null;}
   burstUntil=Date.now()+90000;return finalMin;
 }
 async function pollOnce(){
