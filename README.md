@@ -8,6 +8,8 @@ nothing to install. It runs **hub-only**: every CPDLC clearance goes through the
 `index.html` is the entire app (HTML + CSS + JavaScript in one file). It talks directly
 to the hub over HTTPS.
 
+Live link here https://djbrombizzle.github.io/vUSAlink/
+
 ---
 
 ## Using it (quick tour)
