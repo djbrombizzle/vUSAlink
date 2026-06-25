@@ -74,6 +74,8 @@
   .chip.disabled{opacity:.45}
 
   .altlist{max-height:230px;overflow:auto;border-top:1px solid #333}
+  .agrid{border-top:1px solid #333;max-height:340px;overflow:auto}
+  .agrid .arow{display:grid;grid-template-columns:1fr 1fr 1fr;align-items:center}
   .altlist .ai{padding:2px 10px;cursor:pointer;display:flex;justify-content:space-between}
   .altlist .ai:hover{background:#1c1c1c} .altlist .ai.sel{background:var(--sel);color:#fff}
   .altlist .ai .t{color:var(--fg-dim)}
@@ -95,6 +97,7 @@
   .sgrid .srow{grid-template-columns:1fr 1fr 1fr}
   .cellbtn{padding:2px 4px;cursor:pointer;text-align:center}
   .cellbtn:hover{background:#1c1c1c}.cellbtn.sel{background:var(--sel);color:#fff}
+  .cellbtn.cur{color:var(--cyan)}
   .cellbtn.dim{color:var(--fg-dim)}
 
   #routemenu{min-width:560px}
@@ -328,10 +331,13 @@ body.edst #edstbar{display:block;background:#000;border-bottom:1px solid #333;
 
 <!-- ALT menu -->
 <div id="altmenu" class="pop hidden">
-  <div class="hdr"><span class="title" id="altTitle">CALLSIGN</span><span class="x" data-close="altmenu">X</span></div>
-  <div class="row"><span class="chip amend">AMEND</span><span class="chip uplink" id="altUplink">UPLINK</span></div>
-  <div class="row" id="altCurrent" style="color:var(--fg-dim)"></div>
-  <div class="altlist" id="altList"></div>
+  <div class="hdr"><span class="title">Altitude Information</span><span class="x" data-close="altmenu">X</span></div>
+  <div class="acline" id="altAc">CALLSIGN TYPE</div>
+  <div class="row"><span class="chip amend">Amend</span><span class="chip">Scratchpad</span>
+    <span class="chip uplink hidden" id="altUplink">UPLINK</span></div>
+  <div class="row"><span style="color:var(--fg-dim)">Altitude</span>
+    <input id="altInput" autocomplete="off" inputmode="numeric" style="width:96px" placeholder="FL / feet"></div>
+  <div class="agrid" id="altList"></div>
 </div>
 
 <!-- HEADING menu -->
@@ -758,20 +764,46 @@ function renderBoard(){
 //============================================================ ALT menu
 const altmenu=document.getElementById('altmenu');
 let altTarget=null,altSelected=null;
+function parseAlt(v){
+  v=(v||'').replace(/[,\s]/g,'').toUpperCase().replace(/^FL/,'');
+  if(!/^\d+$/.test(v))return null;
+  let n=parseInt(v,10);
+  if(n>=1000)n=Math.round(n/100);     // entered in feet -> flight level
+  return (n<10||n>600)?null:n;
+}
 function openAltMenu(idx,x,y){
   const a=displayList()[idx];altTarget=a;altSelected=null;
-  document.getElementById('altTitle').textContent=a.cs;
-  document.getElementById('altCurrent').textContent='current: '+flStr(a.alt||0);
+  document.getElementById('altAc').textContent=`${a.cs}  ${a.type||''}`;
+  document.getElementById('altInput').value=a.alt?flStr(a.alt):'';
+  showUplink('altUplink',false);
   const L=document.getElementById('altList');L.innerHTML='';
-  for(let fl=450;fl>=60;fl-=10){
-    const ai=document.createElement('div');ai.className='ai';
-    ai.innerHTML=`<span>${pad3(fl)}</span>`;
-    if(fl===a.alt){ai.classList.add('sel');altSelected=fl;}
-    ai.onclick=()=>{L.querySelectorAll('.ai').forEach(e=>e.classList.remove('sel'));ai.classList.add('sel');altSelected=fl;};
-    L.appendChild(ai);
+  const levels=[];for(let fl=450;fl>=60;fl-=10)levels.push(fl);
+  for(let i=0;i<levels.length;i+=3){
+    const row=document.createElement('div');row.className='arow';
+    for(let j=0;j<3;j++){
+      const fl=levels[i+j];const c=document.createElement('div');c.className='cellbtn';
+      if(fl==null){c.innerHTML='&nbsp;';}
+      else{c.textContent=pad3(fl);if(fl===a.alt)c.classList.add('cur');c.onclick=()=>stageAlt(fl);}
+      row.appendChild(c);
+    }
+    L.appendChild(row);
   }
-  placePop(altmenu,x,y);const s=L.querySelector('.ai.sel');if(s)s.scrollIntoView({block:'center'});
+  placePop(altmenu,x,y);
+  const cur=L.querySelector('.cellbtn.cur');if(cur)cur.scrollIntoView({block:'center'});
 }
+function altHighlight(fl){
+  document.getElementById('altList').querySelectorAll('.cellbtn').forEach(e=>
+    e.classList.toggle('sel',fl!=null&&e.textContent===pad3(fl)));
+}
+function stageAlt(fl){
+  altSelected=fl;altHighlight(fl);
+  document.getElementById('altInput').value=flStr(fl);
+  showUplink('altUplink',true);
+}
+document.getElementById('altInput').addEventListener('input',()=>{
+  const fl=parseAlt(document.getElementById('altInput').value);
+  altSelected=fl;altHighlight(fl);showUplink('altUplink',fl!=null);
+});
 document.getElementById('altUplink').onclick=async()=>{
   if(!altTarget||altSelected==null)return;
   const cs=altTarget.cs,cur=altTarget.alt||0,tgt=altSelected;
