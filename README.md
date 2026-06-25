@@ -10,35 +10,6 @@ to the hub over HTTPS.
 
 ---
 
-## Prerequisite (one time): the hub must allow browser calls
-
-The browser version calls the hub directly, so the hub has to send CORS headers. That
-support is built into the current `hub.py` — **redeploy `hub-for-railway/` to Railway
-once** so the live hub is running the CORS-enabled build. If you skip this, the website
-will load but every hub request will fail with a CORS error in the browser console.
-
-(The hub URL is already baked into the page:
-`https://web-production-3d9fe.up.railway.app`. If your hub URL changes, edit the
-`DEFAULT_HUB_URL` line near the top of the `<script>` in `index.html`.)
-
----
-
-## Publish the site (GitHub Pages — free)
-
-1. Create (or reuse) a **public** GitHub repo, e.g. `vusalink-web`.
-2. Upload **`index.html`** to the repo root (Add file → Upload files → commit).
-3. Repo **Settings → Pages**:
-   - **Source:** Deploy from a branch
-   - **Branch:** `main`, folder `/ (root)` → **Save**
-4. Wait ~1 minute. Your link appears at the top of the Pages settings, e.g.
-   `https://YOURNAME.github.io/vusalink-web/`
-5. Share that link. Done.
-
-> Want a tidier URL? Add a `CNAME` file with your custom domain and point a DNS
-> CNAME record at `YOURNAME.github.io` (standard GitHub Pages custom-domain setup).
-
----
-
 ## Using it (quick tour)
 
 -----------------------------------------------------------
