@@ -655,7 +655,7 @@ async function pollOnce(){
   if(!configured()&&!hubMode())return;
   try{const res=await api('/api/poll',{});
     setHoppie(true,hubMode()?('hub '+(hubArtcc||'\u2026')):('online as '+settings.station));
-    if(res.error){setHoppie(false,res.error);return;}
+    if(res.error){setHoppie(false,'verify position to send');return;}
     if(hubMode()){applyVerify(res.verify);updateConnState(res.connected,res.pending);}
     const batch=res.messages||[];
     if(!pollPrimed){                       // first batch is replayed backlog: sync state silently
@@ -1372,7 +1372,7 @@ function beep(freq,dur,delay,vol,type){
   g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
   o.connect(g).connect(audioCtx.destination);o.start(t);o.stop(t+dur+0.03);
 }
-function soundLogon(){if(settings.muted||suppressSounds)return;ensureAudio();beep(660,0.12,0,0.40,'sine');beep(990,0.14,0.10,0.45,'sine');beep(1320,0.16,0.22,0.40,'sine');}   // loud rising 3-note chime
+function soundLogon(){soundMessage();}   // logon uses the message (M) chime
 function soundMessage(isRepeat){
   if(settings.muted||suppressSounds)return;ensureAudio();
   const vol=isRepeat?0.40:0.36;
