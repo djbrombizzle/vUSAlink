@@ -44,6 +44,9 @@
   .sbox{display:inline-block;width:14px;height:14px;border:1px solid #4a4a4a;margin-right:2px;
     text-align:center;line-height:13px;color:var(--fg-dim);font-size:10px;vertical-align:middle}
   .sbox.on{background:#fff;color:#000;border-color:#fff}
+  .sbox.lbox.on,.sbox.lbox.lreq{cursor:pointer}
+  .sbox.lreq{animation:lflash .7s steps(1,start) infinite}   /* re-logon request: flash white */
+  @keyframes lflash{0%,49%{background:#fff;color:#000;border-color:#fff}50%,100%{background:transparent;color:#fff;border-color:#fff}}
   .sbox.ho{background:var(--amber);color:#000;border-color:var(--amber)}
   .sbox.msgbox{cursor:pointer}
   .sbox.flash{animation:flash .8s steps(1) infinite;border-color:var(--alert)}
@@ -340,7 +343,7 @@ body.edst #edstbar{display:block;background:#000;border-bottom:1px solid #333;
 </table>
 
 <div class="footnote">
-  Boxes: <b>L</b> logon (white = on CPDLC) &middot; <b>M</b> message (flashes red on incoming &mdash; click to read) &middot; <b>H</b> handoff (amber = pending) &middot; <b>W</b> WILCO (flashes white 120s + chime when a pilot WILCOs, then an outline).
+  Boxes: <b>L</b> logon (white = on CPDLC; <b>click</b> to force logoff, which disables auto-logon; flashes white + alerts when a force-logged-off aircraft asks to log back on &mdash; click to accept) &middot; <b>M</b> message (flashes red on incoming &mdash; click to read) &middot; <b>H</b> handoff (amber = pending) &middot; <b>W</b> WILCO (flashes white 120s + chime when a pilot WILCOs, then an outline).
   Click <b>FLIGHT ID</b> to hand off &middot; <b>ALT</b> for a level &middot; <b>ROUTE</b> for direct. Logons auto-accept.
 </div>
 
@@ -471,6 +474,7 @@ let assigned=LS.get('vedst_assigned',{});
 let liveFlights=demoLive();
 let facilities=[];                       // nearby online facilities (handoff targets)
 const connected=new Set();               // L: on CPDLC
+const logonReq=new Set();                // L flashes: blocked a/c requesting to log back on
 let hubConnReady=false;                   // suppress logon chime on first hub poll
 let pollPrimed=false;                     // first poll after (re)connect replays backlog
 let suppressSounds=false;                 // silence chimes while replaying that backlog
@@ -592,6 +596,7 @@ function parseFixes(route){
 
 //============================================================ CPDLC
 function pad3(n){return ('000'+Math.round(Math.abs(n))).slice(-3);}
+function round10(fl){return Math.round((Number(fl)||0)/10)*10;}   // FL to nearest 10 (331->330, 146->150)
 function flStr(fl){return 'FL'+pad3(fl);}
 function buildPacket(min,mrn,ra,msg){return `/data2/${min}/${mrn||''}/${ra}/${msg}`;}
 function parsePacket(pk){const p=pk.split('/');if(p[1]!=='data2')return null;
@@ -603,13 +608,14 @@ function canControl(){return configured()||(hubMode()&&verifyOK);}   // solo OR 
 function monitorMode(){return !hubMode()&&!configured();}     // VIEW ONLY (no position signed in)
 function monitorArtcc(){return (settings.viewArtcc||'').trim().toUpperCase();}
 function airspaceId(){return (hubMode()?hubArtcc:(settings.airspace||settings.station||'')).trim().toUpperCase();}
-const HUB_EP={'/api/vatsim':'/hub/vatsim','/api/poll':'/hub/poll','/api/send':'/hub/send'};
+const HUB_EP={'/api/vatsim':'/hub/vatsim','/api/poll':'/hub/poll','/api/send':'/hub/send','/api/conn':'/hub/conn'};
 function hubBase(){return (settings.hubUrl||DEFAULT_HUB_URL).replace(/\/+$/,'');}
 async function api(path,extra){
   extra=extra||{};
   if(hubMode()){                      // call the hub directly (works as a static site)
     const body={cid:(settings.cid||'').trim(),token:settings.hubToken||'',sid:SID};
     if(path==='/api/send'){body.to=extra.to||'';body.packet=extra.packet||'';}
+    if(path==='/api/conn'){body.to=extra.to||'';body.action=extra.action||'';}
     return (await fetch(hubBase()+HUB_EP[path],{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   }
@@ -650,13 +656,27 @@ async function pollOnce(){
   try{const res=await api('/api/poll',{});
     setHoppie(true,hubMode()?('hub '+(hubArtcc||'\u2026')):('online as '+settings.station));
     if(res.error){setHoppie(false,res.error);return;}
-    if(hubMode())applyVerify(res.verify);
+    if(hubMode()){applyVerify(res.verify);updateConnState(res.connected,res.pending);}
     const batch=res.messages||[];
     if(!pollPrimed){                       // first batch is replayed backlog: sync state silently
       suppressSounds=true;
       try{batch.forEach(handleIncoming);}finally{suppressSounds=false;pollPrimed=true;}
     }else batch.forEach(handleIncoming);
   }catch(e){setHoppie(false,'proxy offline');}
+}
+// Hub is authoritative for who is on CPDLC (connected) and who was force-logged-off
+// and is now asking to come back (pending). Diff against what we had to chime on a
+// new logon and alert on a new re-logon request. Runs every poll (~3s) in hub mode.
+function updateConnState(connList,pendList){
+  if(connList===undefined&&pendList===undefined)return;   // solo poll: managed elsewhere
+  const nc=new Set(connList||[]), np=new Set(pendList||[]);
+  let joined=false,reqd=false;
+  nc.forEach(c=>{if(!connected.has(c))joined=true;});
+  np.forEach(c=>{if(!logonReq.has(c))reqd=true;});
+  connected.clear();nc.forEach(c=>connected.add(c));
+  logonReq.clear();np.forEach(c=>logonReq.add(c));
+  if(pollPrimed&&!suppressSounds){ if(joined)soundLogon(); if(reqd)soundLogonReq(); }
+  hubConnReady=true;renderBoard();
 }
 function schedulePoll(){if(pollTimer)clearTimeout(pollTimer);
   let base,j;
@@ -772,7 +792,7 @@ async function refreshMonitor(force){
       body:JSON.stringify({airspace:art,since:feedSince})})).json();
     if(!d.ok){setVat('err',d.error||'view error');return;}
     liveFlights=(d.flights||[]).map(mapLive);facilities=[];
-    connected.clear();(d.connected||[]).forEach(c=>connected.add(c));
+    connected.clear();(d.connected||[]).forEach(c=>connected.add(c));logonReq.clear();
     renderFeed(d.messages,d.evtId);
     setVat('on',`VIEW ${art} \u00b7 ${connected.size} on KUSA \u00b7 ${liveFlights.length} a/c`);
     renderBoard();
@@ -792,12 +812,7 @@ async function refreshVatsim(force){
     liveFlights=d.flights.map(mapLive);annotateFlights();facilities=d.facilities||[];
     if(hub){
       hubArtcc=d.airspace||hubArtcc;
-      {const nc=new Set(d.connected||[]);let joined=false;
-       nc.forEach(c=>{if(!connected.has(c))joined=true;});
-       connected.clear();nc.forEach(c=>connected.add(c));
-       if(joined&&hubConnReady)soundLogon();
-       hubConnReady=true;}
-      applyVerify(d.verify);
+      applyVerify(d.verify);          // connected/pending are owned by the fast poll (updateConnState)
       setVat('on',`hub ${d.airspace} \u00b7 ${liveFlights.length} a/c \u00b7 ${connected.size} CPDLC`
         +(myPosition.label?` \u00b7 ${myPosition.label} ${formatFreqMhz(myPosition.freqMhz)}`:''));
     }else{
@@ -821,7 +836,10 @@ function scheduleVatsim(){if(vatsimTimer)clearInterval(vatsimTimer);
 //============================================================ board
 const rows=document.getElementById('rows');
 function boxHtml(cs){
-  return `<span class="sbox ${connected.has(cs)?'on':''}" title="logon">L</span>`
+  const conn=connected.has(cs), req=logonReq.has(cs);
+  const lcls=conn?'on':(req?'lreq':'');
+  const ltt=conn?'on CPDLC \u2014 click to force logoff':(req?'requesting logon \u2014 click to accept':'logon');
+  return `<span class="sbox lbox ${lcls}" data-logon="${cs}" title="${ltt}">L</span>`
         +`<span class="sbox msgbox ${msgAlert.has(cs)?'flash':''}" data-msg="${cs}" title="message">M</span>`
         +`<span class="sbox ${handoffPending.has(cs)?'ho':''}" title="handoff">H</span>`;
 }
@@ -837,11 +855,11 @@ function altCellHtml(a){
   const asg=assigned[a.cs];
   if(asg!=null){
     const col=altPending.has(a.cs)?'var(--green)':'#fff';
-    const cur=a.alt||0;
+    const cur=round10(a.alt||0);
     return (cur&&cur!==asg?`<span style="color:var(--fg-dim)">${pad3(cur)}</span> `:'')
           +`<span style="color:${col}">${pad3(asg)}</span>`;
   }
-  return pad3(a.alt||0);
+  return pad3(round10(a.alt||0));
 }
 function hsCellHtml(a,idx){
   const h=a.hdg?('H'+pad3(a.hdg)):'---';
@@ -861,7 +879,9 @@ function renderRowClassic(a,idx){
     <td class="route-cell" data-route="${idx}" style="${rcol}">${a.route||''}</td>`;
 }
 function renderRowEdst(a,idx){
-  const bk=connected.has(a.cs)?'<span class="gc"></span>':'<span class="bkN">N</span>';
+  const bk=connected.has(a.cs)?`<span class="gc lbox" data-logon="${a.cs}" title="on CPDLC \u2014 click to force logoff"></span>`
+          :logonReq.has(a.cs)?`<span class="bkN lreq lbox" data-logon="${a.cs}" title="requesting logon \u2014 click to accept">N</span>`
+          :'<span class="bkN">N</span>';
   const rbox=`<span class="abox msg ${msgAlert.has(a.cs)?'flash':''}" data-msg="${a.cs}" title="message"></span>`;
   const ybox=`<span class="abox"></span>`;
   const abox=`<span class="abox ${handoffPending.has(a.cs)?'ho':''}" title="handoff"></span>`;
@@ -1312,11 +1332,22 @@ document.querySelector('#board thead').addEventListener('click',e=>{
 rows.addEventListener('click',e=>{
   if(!canControl())return;            // VIEW ONLY: board is read-only until verified
   const mbox=e.target.closest('[data-msg]');
+  const lbox=e.target.closest('[data-logon]');
   const fid=e.target.closest('[data-fid]');
   const alt=e.target.closest('.alt-cell');
   const hdgc=e.target.closest('.hdg-cell');
   const spdc=e.target.closest('.spd-cell');
   const rt=e.target.closest('.route-cell');
+  if(lbox){const cs=lbox.dataset.logon;
+    if(logonReq.has(cs)){                         // flashing L: accept the re-logon
+      logonReq.delete(cs);connected.add(cs);renderBoard();
+      api('/api/conn',{to:cs,action:'accept'}).then(r=>{if(r&&r.ok)logMsg('sys',cs,'logon accepted');});
+    }else if(connected.has(cs)){                  // solid L: force this aircraft off KUSA
+      if(!confirm('Force '+cs+' off CPDLC?\nAuto-logon will be disabled until they request and you accept again.'))return;
+      connected.delete(cs);logonReq.delete(cs);renderBoard();
+      api('/api/conn',{to:cs,action:'logoff'}).then(r=>{if(r&&r.ok)logMsg('sys',cs,'forced logoff \u2014 auto-logon disabled');});
+    }
+    return;}
   if(mbox){const r=mbox.getBoundingClientRect();openMessages(mbox.dataset.msg,r.left,r.bottom+2);}
   else if(fid){const r=fid.getBoundingClientRect();openHandoff(+fid.dataset.fid,r.left,r.bottom+2);}
   else if(alt){const r=alt.getBoundingClientRect();openAltMenu(+alt.dataset.alt,r.left,r.bottom+2);}
@@ -1348,6 +1379,8 @@ function soundMessage(isRepeat){
   beep(520,0.16,0,vol,'triangle');beep(520,0.16,0.20,vol,'triangle');
 }
 function soundWilco(){if(settings.muted||suppressSounds)return;ensureAudio();beep(784,0.12,0,0.36,'sine');beep(1047,0.15,0.10,0.40,'sine');} // rising WILCO chime
+function soundLogonReq(){if(settings.muted||suppressSounds)return;ensureAudio();   // re-logon request: distinct two-tone alert
+  beep(988,0.13,0,0.42,'square');beep(740,0.13,0.16,0.42,'square');beep(988,0.16,0.32,0.42,'square');}
 ['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,ensureAudio,{once:true}));   // unlock on first interaction
 
 function updateSoundBtn(){document.getElementById('btnSound').textContent=settings.muted?'SOUND OFF':'SOUND ON';}
