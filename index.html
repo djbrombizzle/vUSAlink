@@ -167,10 +167,17 @@ body.edst #board{font-family:'EDST','EDSTv2',Consolas,monospace;border-collapse:
 #verifyBar.hidden{display:none}
 #verifyBar #verifyCode{font-weight:700;color:#fff;background:#000;padding:1px 7px;border-radius:3px;letter-spacing:1px}
 #verifyBar #verifyState{color:#ffe7b0;font-style:italic;margin-left:6px}
+#posBar{background:#0e1f22;color:#9fe6e0;border:1px solid #2f6b73;border-left:4px solid var(--cyan);
+  padding:5px 12px;margin:4px 8px 0;border-radius:3px;font-size:13px;line-height:1.4}
+#posBar.hidden{display:none}
+#posBar #posLabel{font-weight:700;color:#fff;letter-spacing:.5px}
+#posBar #posFreq{font-weight:700;color:#fff;margin-left:10px}
+#posBar #posHint{color:#7ab8b4;font-size:11px;margin-left:10px}
 body.edst #aclbar{display:flex;align-items:center;background:#2e9c9c;color:#06201f;
   font-weight:bold;letter-spacing:.5px;padding:2px 10px;font-family:'EDST','EDSTv2',monospace;}
 body.edst #aclbar .mini{width:18px;height:13px;border:1px solid #06322f;margin-right:auto}
 body.edst #aclbar .seg{margin-left:30px}
+body.edst #posBar{font-family:'EDST','EDSTv2',monospace;background:#06201f;border-color:#2e9c9c;color:#9fe6e0}
 
 /* header rows: show the right one per skin */
 #headEdst{display:none}
@@ -299,6 +306,10 @@ body.edst #edstbar{display:block;background:#000;border-bottom:1px solid #333;
   <b>VERIFY TO SEND CPDLC</b> &mdash; add this code to your VATSIM controller info / ATIS:
   <span id="verifyCode">VUSA-----</span>, then wait ~30 s. You can remove it once verified.
   <span id="verifyState">checking&hellip;</span>
+</div>
+<div id="posBar" class="hidden">
+  <b>POSITION</b> <span id="posLabel">&mdash;</span> <span id="posFreq"></span>
+  <span id="posHint">showing aircraft tuned to this frequency</span>
 </div>
 <table id="board">
   <thead>
@@ -443,6 +454,8 @@ const LS={get:(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e)
           set:(k,v)=>localStorage.setItem(k,JSON.stringify(v))};
 const HUB_FEATURE=true;   // Shared HUB mode (KUSA) — approved by Hoppie owner
 const DEFAULT_HUB_URL='https://web-production-3d9fe.up.railway.app';   // shared KUSA hub, baked in
+const VATSIM_DATA_URL='https://data.vatsim.net/v3/vatsim-data.json';
+const VATSIM_TX_URL='https://data.vatsim.net/v3/transceivers-data.json';
 // This app is hub-only: every controller connects to the shared KUSA hub with just their
 // VATSIM CID. The hub URL is built in, so Settings only asks for the CID. (Solo/direct-Hoppie
 // is retired — a browser can't reach Hoppie directly, which is why the hub exists.)
@@ -468,7 +481,10 @@ const altPending=new Set();              // alt clearance sent, awaiting WILCO (
 const routePending=new Set();            // route clearance sent, awaiting WILCO (green)
 const messages={};                       // cs -> [{text,time}]
 const seenMsgIds=new Set();
+const msgRepeatTimers={};                // cs -> interval id for unread message chime
 let pollTimer=null,burstUntil=0,vatsimTimer=null;
+let myPosition={callsign:'',label:'',freqMhz:null};
+const pilotFreqs=new Map();              // callsign -> [mhz, ...] from VATSIM transceivers feed
 
 function demoLive(){return [
  {cs:'JBU1111',type:'A320/L',alt:330,hs:'/450',route:'KJFK LINND342020 CHUBY Y488 SAUCR L453 LAMER L453 RODRK POKEG UT17 KARUM KARUM1B TNCC',_routeRaw:'LINND342020 CHUBY Y488 SAUCR L453 LAMER L453 RODRK POKEG UT17 KARUM'},
@@ -481,9 +497,72 @@ function board(){return manual.concat(liveFlights);}
 let sortState={key:null,dir:1};
 function gsOf(a){const m=(a.hs||'').match(/(\d+)/);return m?+m[1]:0;}
 function statusScore(a){return (msgAlert.has(a.cs)?4:0)+(handoffPending.has(a.cs)?2:0)+(connected.has(a.cs)?1:0);}
+function freqToMhz(f){
+  if(f==null||f==='')return null;
+  const n=Number(f);
+  if(!Number.isFinite(n))return null;
+  if(n>1e6)return n/1e6;               // transceiver API: Hz (e.g. 135925000)
+  return n;                             // controller API: MHz string (e.g. 135.925)
+}
+function freqsMatch(a,b){return a!=null&&b!=null&&Math.abs(a-b)<0.0015;}
+function formatFreqMhz(mhz){return mhz==null?'':mhz.toFixed(3);}
+function positionLabelFromCallsign(cs){
+  const u=(cs||'').toUpperCase();
+  if(u.endsWith('_CTR'))return u.slice(0,-4);
+  const i=u.lastIndexOf('_');
+  return i>0?u.slice(0,i):u;
+}
+function pilotMatchesOurFreq(cs){
+  if(myPosition.freqMhz==null)return true;
+  const freqs=pilotFreqs.get((cs||'').toUpperCase())||[];
+  return freqs.some(f=>freqsMatch(f,myPosition.freqMhz));
+}
+function freqFilterActive(){
+  return !monitorMode()&&!settings.showAll&&myPosition.freqMhz!=null&&(hubMode()||configured());
+}
+function annotateFlights(){
+  liveFlights.forEach(f=>{f.onFreq=pilotMatchesOurFreq(f.cs);});
+}
+function updatePositionBar(){
+  const bar=document.getElementById('posBar');if(!bar)return;
+  if(myPosition.label&&myPosition.freqMhz!=null&&!monitorMode()&&(hubMode()||configured())){
+    document.getElementById('posLabel').textContent=myPosition.label;
+    document.getElementById('posFreq').textContent=formatFreqMhz(myPosition.freqMhz);
+    bar.classList.remove('hidden');
+  }else bar.classList.add('hidden');
+}
+async function refreshVatsimFeedMeta(){
+  if(monitorMode()||(!hubMode()&&!configured())){
+    myPosition={callsign:'',label:'',freqMhz:null};pilotFreqs.clear();return;
+  }
+  try{
+    const [vData,txData]=await Promise.all([
+      fetch(VATSIM_DATA_URL).then(r=>r.json()),
+      fetch(VATSIM_TX_URL).then(r=>r.json()),
+    ]);
+    pilotFreqs.clear();
+    (txData||[]).forEach(entry=>{
+      const cs=(entry.callsign||'').toUpperCase();if(!cs)return;
+      const freqs=(entry.transceivers||[]).map(t=>freqToMhz(t.frequency)).filter(f=>f!=null);
+      if(freqs.length)pilotFreqs.set(cs,freqs);
+    });
+    const cid=(settings.cid||'').trim();
+    const st=(settings.station||'').trim().toUpperCase();
+    let me=null;
+    if(cid)me=(vData.controllers||[]).find(c=>String(c.cid)===cid);
+    if(!me&&st)me=(vData.controllers||[]).find(c=>(c.callsign||'').toUpperCase()===st);
+    if(me){
+      const freq=freqToMhz(me.frequency);
+      myPosition={callsign:(me.callsign||'').toUpperCase(),label:positionLabelFromCallsign(me.callsign),freqMhz:freq};
+    }else myPosition={callsign:'',label:'',freqMhz:null};
+  }catch(e){
+    myPosition={callsign:'',label:'',freqMhz:null};
+  }
+}
 function displayList(){
   let list=board().slice();
   if(!settings.showAll)list=list.filter(a=>connected.has(a.cs));   // GREEN / on KUSA only
+  if(freqFilterActive())list=list.filter(a=>a.source==='manual'||a.onFreq);
   const k=sortState.key;if(!k)return list;
   const acc={lmh:a=>statusScore(a),cs:a=>a.cs||'',type:a=>a.type||'',alt:a=>a.alt||0,gs:a=>gsOf(a),squawk:a=>a.squawk||'',route:a=>a.route||''}[k];
   if(!acc)return list;
@@ -602,6 +681,7 @@ function autoAcceptLogon(cs,theirMin){
   connected.add(cs);logMsg('sys',cs,'logon auto-accepted \u2014 CPDLC connected');soundLogon();renderBoard();
 }
 function handleResponse(cs,d,msg){
+  if(!pilotMatchesOurFreq(cs))return;   // WILCO belongs to the controller on that voice freq
   logMsg('in',cs,'response: '+msg);
   const mrn=String(d.mrn);
   if(/WILCO/.test(msg)){
@@ -618,9 +698,21 @@ function handleResponse(cs,d,msg){
   }
   renderBoard();
 }
+function stopMsgRepeat(cs){
+  if(msgRepeatTimers[cs]){clearInterval(msgRepeatTimers[cs]);delete msgRepeatTimers[cs];}
+}
+function startMsgRepeat(cs){
+  stopMsgRepeat(cs);
+  msgRepeatTimers[cs]=setInterval(()=>{
+    if(msgAlert.has(cs)&&!settings.muted)soundMessage(true);
+  },60000);
+}
 function pushMessage(cs,text){
+  if(myPosition.freqMhz!=null&&!pilotMatchesOurFreq(cs)){
+    logMsg('in',cs,text);return;        // other sector position — log only, no M alert
+  }
   (messages[cs]=messages[cs]||[]).push({text:(text||'').replace(/@/g,' '),time:new Date().toLocaleTimeString()});
-  msgAlert.add(cs);logMsg('in',cs,text);soundMessage();renderBoard();
+  msgAlert.add(cs);logMsg('in',cs,text);soundMessage();startMsgRepeat(cs);renderBoard();
 }
 
 //============================================================ VATSIM
@@ -662,9 +754,9 @@ async function refreshVatsim(force){
      ||!handoffpop.classList.contains('hidden')))return;
   setVat('busy','VATSIM '+(airspace||'hub')+' ...');
   try{
-    const d=await api('/api/vatsim',{airspace});
-    if(!d.ok){setVat('err',d.error||'vatsim error');return;}
-    liveFlights=d.flights.map(mapLive);facilities=d.facilities||[];
+    const [,d]=await Promise.all([refreshVatsimFeedMeta(),api('/api/vatsim',{airspace})]);
+    if(!d.ok){setVat('err',d.error||'vatsim error');updatePositionBar();return;}
+    liveFlights=d.flights.map(mapLive);annotateFlights();facilities=d.facilities||[];
     if(hub){
       hubArtcc=d.airspace||hubArtcc;
       {const nc=new Set(d.connected||[]);let joined=false;
@@ -673,11 +765,14 @@ async function refreshVatsim(force){
        if(joined&&hubConnReady)soundLogon();
        hubConnReady=true;}
       applyVerify(d.verify);
-      setVat('on',`hub ${d.airspace} \u00b7 ${liveFlights.length} a/c \u00b7 ${connected.size} CPDLC`);
+      setVat('on',`hub ${d.airspace} \u00b7 ${liveFlights.length} a/c \u00b7 ${connected.size} CPDLC`
+        +(myPosition.label?` \u00b7 ${myPosition.label} ${formatFreqMhz(myPosition.freqMhz)}`:''));
     }else{
       const c=d.counts||{};
-      setVat('on',`${d.airspace}  ${c.DEP||0}dep ${c.ARR||0}arr ${c.OVR||0}ovr ${c.INT||0}int \u00b7 ${facilities.length} adj`);
+      setVat('on',`${d.airspace}  ${c.DEP||0}dep ${c.ARR||0}arr ${c.OVR||0}ovr ${c.INT||0}int \u00b7 ${facilities.length} adj`
+        +(myPosition.label?` \u00b7 ${myPosition.label} ${formatFreqMhz(myPosition.freqMhz)}`:''));
     }
+    updatePositionBar();
     renderBoard();
   }catch(e){setVat('err','proxy offline');}
 }
@@ -685,7 +780,7 @@ function mapLive(f){
   const full=[f.dep,f.route,f.arr].filter(Boolean).join(' ').replace(/\s+/g,' ').trim();
   return {cs:f.callsign,type:f.type||'----',alt:f.fl||0,hs:'/'+(f.gs||''),
     cid:f.cid||'',squawk:f.squawk||'',hdg:f.hdg||0,gs:f.gs||0,
-    route:full,_routeRaw:f.route||'',routeFixes:f.routeFixes||null,cat:f.category,dep:f.dep,arr:f.arr,source:'live'};
+    route:full,_routeRaw:f.route||'',routeFixes:f.routeFixes||null,cat:f.category,dep:f.dep,arr:f.arr,source:'live',onFreq:true};
 }
 function scheduleVatsim(){if(vatsimTimer)clearInterval(vatsimTimer);
   vatsimTimer=setInterval(()=>refreshVatsim(false),monitorMode()?12000:30000);}
@@ -755,7 +850,7 @@ function updateMode(){
   else{badge.textContent='VIEW ONLY';badge.className='badge view';if(field)field.style.display='';}
 }
 function renderBoard(){
-  updateMode();
+  updateMode();updatePositionBar();
   const list=displayList();rows.innerHTML='';
   const edst=document.body.classList.contains('edst');
   list.forEach((a,idx)=>{
@@ -1074,7 +1169,7 @@ async function sendHandover(cs,fac){
 //============================================================ MESSAGE popup (M box)
 const msgpop=document.getElementById('msgpop');
 function openMessages(cs,x,y){
-  msgAlert.delete(cs);renderBoard();
+  msgAlert.delete(cs);stopMsgRepeat(cs);renderBoard();
   document.getElementById('mpTitle').textContent='MESSAGES '+cs;
   const L=document.getElementById('mpList');L.innerHTML='';
   const arr=messages[cs]||[];
@@ -1214,12 +1309,21 @@ function beep(freq,dur,delay,vol,type){
   o.connect(g).connect(audioCtx.destination);o.start(t);o.stop(t+dur+0.03);
 }
 function soundLogon(){if(settings.muted)return;ensureAudio();beep(660,0.12,0,0.40,'sine');beep(990,0.14,0.10,0.45,'sine');beep(1320,0.16,0.22,0.40,'sine');}   // loud rising 3-note chime
-function soundMessage(){if(settings.muted)return;ensureAudio();beep(520,0.14,0,0.16,'triangle');beep(520,0.14,0.17,0.16,'triangle');} // double alert
+function soundMessage(isRepeat){
+  if(settings.muted)return;ensureAudio();
+  const vol=isRepeat?0.40:0.36;
+  beep(520,0.16,0,vol,'triangle');beep(520,0.16,0.20,vol,'triangle');
+}
 function soundWilco(){if(settings.muted)return;ensureAudio();beep(784,0.12,0,0.36,'sine');beep(1047,0.15,0.10,0.40,'sine');} // rising WILCO chime
 ['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,ensureAudio,{once:true}));   // unlock on first interaction
 
 function updateSoundBtn(){document.getElementById('btnSound').textContent=settings.muted?'SOUND OFF':'SOUND ON';}
-document.getElementById('btnSound').onclick=()=>{settings.muted=!settings.muted;persist();updateSoundBtn();if(!settings.muted){ensureAudio();soundLogon();}};
+document.getElementById('btnSound').onclick=()=>{
+  settings.muted=!settings.muted;persist();updateSoundBtn();
+  if(settings.muted)Object.keys(msgRepeatTimers).forEach(stopMsgRepeat);
+  else msgAlert.forEach(cs=>startMsgRepeat(cs));
+  if(!settings.muted){ensureAudio();soundLogon();}
+};
 updateSoundBtn();
 
 //============================================================ collapsible log
