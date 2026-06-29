@@ -659,7 +659,9 @@ async function pollOnce(){
   }catch(e){setHoppie(false,'proxy offline');}
 }
 function schedulePoll(){if(pollTimer)clearTimeout(pollTimer);
-  const burst=Date.now()<burstUntil;const base=burst?15000:55000;const j=burst?4000:18000;
+  let base,j;
+  if(hubMode()){base=2500;j=1500;}        // hub poll is a cheap in-memory read -> near real-time co-ctrl sync (2.5-4s)
+  else{const burst=Date.now()<burstUntil;base=burst?15000:55000;j=burst?4000:18000;}   // solo hits Hoppie: respect rate
   pollTimer=setTimeout(async()=>{await pollOnce();schedulePoll();},base+Math.random()*j);}
 
 //============================================================ incoming handling
@@ -814,7 +816,7 @@ function mapLive(f){
     route:full,_routeRaw:f.route||'',routeFixes:f.routeFixes||null,cat:f.category,dep:f.dep,arr:f.arr,source:'live',onFreq:true};
 }
 function scheduleVatsim(){if(vatsimTimer)clearInterval(vatsimTimer);
-  vatsimTimer=setInterval(()=>refreshVatsim(false),monitorMode()?12000:30000);}
+  vatsimTimer=setInterval(()=>refreshVatsim(false),monitorMode()?12000:15000);}   // hub 15s = VATSIM feed update cadence
 
 //============================================================ board
 const rows=document.getElementById('rows');
