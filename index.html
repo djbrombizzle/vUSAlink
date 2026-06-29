@@ -349,7 +349,8 @@ let manual=LS.get('vedst_manual',[]);
 let assigned=LS.get('vedst_assigned',{});
 let liveFlights=demoLive();
 let facilities=[];                       // nearby online facilities (handoff targets)
-const connected=new Set();               // L: on CPDLC
+const connected=new Set();               // green +: on KUSA (hub connection)
+const confirmed=new Set();               // L solid white: pilot rogered CONFIRM CPDLC CONTACT
 const logonReq=new Set();                // L flashes: blocked a/c requesting to log back on
 let hubConnReady=false;                   // suppress logon chime on first hub poll
 let pollPrimed=false;                     // first poll after (re)connect replays backlog
@@ -532,7 +533,7 @@ async function pollOnce(){
   try{const res=await api('/api/poll',{});
     setHoppie(true,hubMode()?('hub '+(hubArtcc||'\u2026')):('online as '+settings.station));
     if(res.error){setHoppie(false,'verify position to send');return;}
-    if(hubMode()){applyVerify(res.verify);updateConnState(res.connected,res.pending);}
+    if(hubMode()){applyVerify(res.verify);updateConnState(res.connected,res.pending,res.confirmed);}
     const batch=res.messages||[];
     if(!pollPrimed){                       // first batch is replayed backlog: sync state silently
       suppressSounds=true;
@@ -543,14 +544,15 @@ async function pollOnce(){
 // Hub is authoritative for who is on CPDLC (connected) and who was force-logged-off
 // and is now asking to come back (pending). Diff against what we had to chime on a
 // new logon and alert on a new re-logon request. Runs every poll (~3s) in hub mode.
-function updateConnState(connList,pendList){
+function updateConnState(connList,pendList,cfmdList){
   if(connList===undefined&&pendList===undefined)return;   // solo poll: managed elsewhere
-  const nc=new Set(connList||[]), np=new Set(pendList||[]);
+  const nc=new Set(connList||[]), np=new Set(pendList||[]), nf=new Set(cfmdList||[]);
   let joined=false,reqd=false;
   nc.forEach(c=>{if(!connected.has(c))joined=true;});
   np.forEach(c=>{if(!logonReq.has(c))reqd=true;});
   connected.clear();nc.forEach(c=>connected.add(c));
   logonReq.clear();np.forEach(c=>logonReq.add(c));
+  confirmed.clear();nf.forEach(c=>confirmed.add(c));
   if(pollPrimed&&!suppressSounds){ if(joined)soundLogon(); if(reqd)soundLogonReq(); }
   hubConnReady=true;renderBoard();
 }
@@ -712,9 +714,13 @@ function scheduleVatsim(){if(vatsimTimer)clearInterval(vatsimTimer);
 //============================================================ board
 const rows=document.getElementById('rows');
 function boxHtml(cs){
-  const conn=connected.has(cs), req=logonReq.has(cs);
-  const lcls=conn?'on':(req?'lreq':'');
-  const ltt=conn?'on CPDLC \u2014 click to force logoff':(req?'requesting logon \u2014 click to accept':'logon');
+  const conn=connected.has(cs), cfmd=confirmed.has(cs), req=logonReq.has(cs);
+  // L is solid only once the pilot has rogered CONFIRM CPDLC CONTACT; a connected
+  // but unconfirmed a/c shows a blank L (still click-to-force-logoff).
+  const lcls=(conn&&cfmd)?'on':(req?'lreq':'');
+  const ltt=(conn&&cfmd)?'CPDLC contact confirmed \u2014 click to force logoff'
+           :conn?'awaiting CPDLC confirmation \u2014 click to force logoff'
+           :(req?'requesting logon \u2014 click to accept':'logon');
   return `<span class="sbox lbox ${lcls}" data-logon="${cs}" title="${ltt}">L</span>`
         +`<span class="sbox msgbox ${msgAlert.has(cs)?'flash':''}" data-msg="${cs}" title="message">M</span>`
         +`<span class="sbox ${handoffPending.has(cs)?'ho':''}" title="handoff">H</span>`;
