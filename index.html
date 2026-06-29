@@ -472,6 +472,8 @@ let liveFlights=demoLive();
 let facilities=[];                       // nearby online facilities (handoff targets)
 const connected=new Set();               // L: on CPDLC
 let hubConnReady=false;                   // suppress logon chime on first hub poll
+let pollPrimed=false;                     // first poll after (re)connect replays backlog
+let suppressSounds=false;                 // silence chimes while replaying that backlog
 const msgAlert=new Set();                // M: unread incoming
 const wilcoAt={};                        // W: cs -> timestamp(ms) of last WILCO
 const handoffPending=new Set();          // H: awaiting WILCO
@@ -649,7 +651,11 @@ async function pollOnce(){
     setHoppie(true,hubMode()?('hub '+(hubArtcc||'\u2026')):('online as '+settings.station));
     if(res.error){setHoppie(false,res.error);return;}
     if(hubMode())applyVerify(res.verify);
-    (res.messages||[]).forEach(handleIncoming);
+    const batch=res.messages||[];
+    if(!pollPrimed){                       // first batch is replayed backlog: sync state silently
+      suppressSounds=true;
+      try{batch.forEach(handleIncoming);}finally{suppressSounds=false;pollPrimed=true;}
+    }else batch.forEach(handleIncoming);
   }catch(e){setHoppie(false,'proxy offline');}
 }
 function schedulePoll(){if(pollTimer)clearTimeout(pollTimer);
@@ -1333,13 +1339,13 @@ function beep(freq,dur,delay,vol,type){
   g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
   o.connect(g).connect(audioCtx.destination);o.start(t);o.stop(t+dur+0.03);
 }
-function soundLogon(){if(settings.muted)return;ensureAudio();beep(660,0.12,0,0.40,'sine');beep(990,0.14,0.10,0.45,'sine');beep(1320,0.16,0.22,0.40,'sine');}   // loud rising 3-note chime
+function soundLogon(){if(settings.muted||suppressSounds)return;ensureAudio();beep(660,0.12,0,0.40,'sine');beep(990,0.14,0.10,0.45,'sine');beep(1320,0.16,0.22,0.40,'sine');}   // loud rising 3-note chime
 function soundMessage(isRepeat){
-  if(settings.muted)return;ensureAudio();
+  if(settings.muted||suppressSounds)return;ensureAudio();
   const vol=isRepeat?0.40:0.36;
   beep(520,0.16,0,vol,'triangle');beep(520,0.16,0.20,vol,'triangle');
 }
-function soundWilco(){if(settings.muted)return;ensureAudio();beep(784,0.12,0,0.36,'sine');beep(1047,0.15,0.10,0.40,'sine');} // rising WILCO chime
+function soundWilco(){if(settings.muted||suppressSounds)return;ensureAudio();beep(784,0.12,0,0.36,'sine');beep(1047,0.15,0.10,0.40,'sine');} // rising WILCO chime
 ['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,ensureAudio,{once:true}));   // unlock on first interaction
 
 function updateSoundBtn(){document.getElementById('btnSound').textContent=settings.muted?'SOUND OFF':'SOUND ON';}
