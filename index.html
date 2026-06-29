@@ -660,6 +660,7 @@ function schedulePoll(){if(pollTimer)clearTimeout(pollTimer);
 const RESP=/^(WILCO|UNABLE|ROGER|AFFIRM|AFFIRMATIVE|NEGATIVE|STANDBY|LOGOFF|LOGGED OFF)\b/;
 function handleIncoming(m){
   const key=m.from+'|'+m.packet;if(seenMsgIds.has(key))return;seenMsgIds.add(key);
+  if(m.peer){handlePeerUplink(m);return;}   // a co-controller on our shared position sent this
   const cs=m.from;
   if(m.type==='cpdlc'){
     const d=parsePacket(m.packet);
@@ -675,6 +676,30 @@ function handleIncoming(m){
     }
   }
   pushMessage(cs,m.packet);              // telex / unparsed
+}
+// A controller sharing our position/frequency (separate CID) sent this uplink;
+// the hub mirrors it to us with peer:true so both stations stay in sync. We
+// replicate the same pending state the sender set, keyed on the hub MIN, so the
+// matching WILCO downlink (same MRN, fanned out to everyone) clears it for us too.
+function handlePeerUplink(m){
+  const d=m.type==='cpdlc'?parsePacket(m.packet||''):null;
+  const cs=(m.to||'').toUpperCase();
+  if(!cs)return;
+  if(!d){logMsg('out',cs+' \u00b7 co-ctrl',m.packet||'');return;}
+  const min=d.min, msg=(d.message||'').toUpperCase().replace(/@/g,'');
+  logMsg('out',cs+' \u00b7 co-ctrl',d.message||'');
+  if(/REQUEST LOGON|LOGON ACCEPTED/.test(msg)){renderBoard();return;}
+  if(/HANDOVER/.test(msg)){
+    handoffPending.add(cs);
+  }else if(/CONTACT|FREQ CHANGE APPROVED|NO FURTHER ATC/.test(msg)){
+    handoffMin[cs]=min;handoffPending.add(cs);
+  }else if(/CROSS|PROCEED DIRECT|CLEARED/.test(msg)){
+    rtMin[cs]=min;routePending.add(cs);
+  }else if(/CLIMB|DESCEND|MAINTAIN/.test(msg)){
+    const fl=msg.match(/FL(\d{3})/);              // altitude (not a speed/heading uplink)
+    if(fl){assigned[cs]=parseInt(fl[1],10);altMin[cs]=min;altPending.add(cs);persist();}
+  }
+  renderBoard();
 }
 function autoAcceptLogon(cs,theirMin){
   sendCpdlc(cs,'N','LOGON ACCEPTED',theirMin);
