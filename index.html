@@ -595,6 +595,9 @@ function handlePeerUplink(m){
   const min=d.min, msg=(d.message||'').toUpperCase().replace(/@/g,'');
   logMsg('out',cs+' \u00b7 co-ctrl',d.message||'');
   if(/REQUEST LOGON|LOGON ACCEPTED/.test(msg)){renderBoard();return;}
+  // CONFIRM CPDLC CONTACT / SERVICES TERMINATED are service advisories, not handoffs
+  // (they contain the word CONTACT) -- log only, never light H.
+  if(/CONFIRM CPDLC CONTACT|CPDLC SERVICES TERMINATED/.test(msg)){renderBoard();return;}
   if(/HANDOVER/.test(msg)){
     handoffPending.add(cs);
   }else if(/CONTACT|FREQ CHANGE APPROVED|NO FURTHER ATC/.test(msg)){
