@@ -351,7 +351,9 @@ const WEB_ONLY=true;
 let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',volume:1,logCollapsed:false,viewArtcc:'',showAll:false});
 if(typeof settings.volume!=='number')settings.volume=(settings.muted===true?0:1);   // migrate old SOUND OFF -> volume 0
 function isMuted(){return !(settings.volume>0);}                 // volume 0 (or unset) = muted
-function volScale(){return Math.max(0,Math.min(1,settings.volume==null?1:settings.volume));}
+// settings.volume is the gain multiplier: 1.0 = current sound levels (shown as 50%),
+// 2.0 = double (shown as 100%). Slider% = multiplier*50.
+function volScale(){return Math.max(0,Math.min(2,settings.volume==null?1:settings.volume));}
 settings.hubUrl=DEFAULT_HUB_URL;          // always the shared hub (ignore any stale stored URL)
 settings.logon='';settings.station='';    // retire any stale solo credentials
 let SID=LS.get('vedst_sid','');
@@ -1273,7 +1275,7 @@ function soundLogonReq(){if(isMuted()||suppressSounds)return;ensureAudio();   //
 function openVolume(){
   const b=document.getElementById('btnSound').getBoundingClientRect();
   const r=document.getElementById('volRange');
-  r.value=Math.round(volScale()*100);
+  r.value=Math.round(volScale()*50);   // multiplier 1.0 -> 50%, 2.0 -> 100%
   document.getElementById('volPct').textContent=r.value+'%';
   placePop(document.getElementById('volpop'),b.left,b.bottom+4);
 }
@@ -1285,7 +1287,7 @@ document.getElementById('btnSound').onclick=()=>{
 const volRange=document.getElementById('volRange');
 volRange.addEventListener('input',e=>{
   const wasMuted=isMuted();
-  settings.volume=(+e.target.value)/100;
+  settings.volume=(+e.target.value)/50;   // 50% -> 1.0x (current), 100% -> 2.0x (double)
   document.getElementById('volPct').textContent=(+e.target.value)+'%';
   if(isMuted()!==wasMuted){                                       // mute boundary crossed
     if(isMuted())Object.keys(msgRepeatTimers).forEach(stopMsgRepeat);
