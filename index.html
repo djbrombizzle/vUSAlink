@@ -68,6 +68,9 @@
   .pop{position:absolute;z-index:50;background:#0b0b0b;border:1px solid #6a6a6a;box-shadow:0 8px 24px rgba(0,0,0,.8);min-width:210px}
   .pop .hdr{display:flex;justify-content:space-between;align-items:center;background:#161616;border-bottom:1px solid #444;padding:3px 8px}
   .pop .hdr .title{color:#fff;letter-spacing:.5px} .pop .hdr .x{cursor:pointer;color:#bbb;padding:0 4px}
+  #volpop .volbody{display:flex;align-items:center;gap:10px;padding:11px 12px}
+  #volpop #volRange{flex:1;cursor:pointer;accent-color:#39c0ff}
+  #volpop #volPct{min-width:40px;text-align:right;color:#fff;font-variant-numeric:tabular-nums}
   .pop .row{display:flex;gap:6px;padding:4px 8px;align-items:center;flex-wrap:wrap}
   .chip{border:1px solid #555;padding:1px 8px;background:#141414;color:var(--fg)}
   .chip.amend{background:var(--red-bg);color:var(--red-fg);border-color:#7a2a2a}
@@ -178,7 +181,7 @@
   <button class="tb-btn" id="btnAdd">+ ADD A/C</button>
   <button class="tb-btn" id="btnRefresh">REFRESH</button>
   <button class="tb-btn" id="btnSettings">SETTINGS</button>
-  <button class="tb-btn" id="btnSound">SOUND ON</button>
+  <button class="tb-btn" id="btnSound">SOUND</button>
   <a class="tb-btn" href="https://discord.gg/ZVSkeMZAqJ" target="_blank" rel="noopener noreferrer">DISCORD</a>
   <span id="modeBadge" class="badge view">VIEW ONLY</span>
   <div id="status">
@@ -291,6 +294,12 @@
   <div class="mlist" id="mpList"></div>
 </div>
 
+<!-- VOLUME popup -->
+<div id="volpop" class="pop hidden">
+  <div class="hdr"><span class="title">SOUND VOLUME</span><span class="x" data-close="volpop">X</span></div>
+  <div class="volbody"><input type="range" id="volRange" min="0" max="100" step="5" value="100"><span id="volPct">100%</span></div>
+</div>
+
 <!-- message log -->
 <div id="logwrap">
   <div class="lh"><span class="title" id="logToggle">DATALINK LOG</span><span style="color:var(--fg-dim);cursor:pointer" id="clearLog">clear</span></div>
@@ -339,7 +348,10 @@ const VATSIM_TX_URL='https://data.vatsim.net/v3/transceivers-data.json';
 // VATSIM CID. The hub URL is built in, so Settings only asks for the CID. (Solo/direct-Hoppie
 // is retired — a browser can't reach Hoppie directly, which is why the hub exists.)
 const WEB_ONLY=true;
-let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',muted:false,logCollapsed:false,viewArtcc:'',showAll:false});
+let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',volume:1,logCollapsed:false,viewArtcc:'',showAll:false});
+if(typeof settings.volume!=='number')settings.volume=(settings.muted===true?0:1);   // migrate old SOUND OFF -> volume 0
+function isMuted(){return !(settings.volume>0);}                 // volume 0 (or unset) = muted
+function volScale(){return Math.max(0,Math.min(1,settings.volume==null?1:settings.volume));}
 settings.hubUrl=DEFAULT_HUB_URL;          // always the shared hub (ignore any stale stored URL)
 settings.logon='';settings.station='';    // retire any stale solo credentials
 let SID=LS.get('vedst_sid','');
@@ -638,7 +650,7 @@ function stopMsgRepeat(cs){
 function startMsgRepeat(cs){
   stopMsgRepeat(cs);
   msgRepeatTimers[cs]=setInterval(()=>{
-    if(msgAlert.has(cs)&&!settings.muted)soundMessage(true);
+    if(msgAlert.has(cs)&&!isMuted())soundMessage(true);
   },60000);
 }
 function pushMessage(cs,text){
@@ -733,7 +745,7 @@ function wilcoBoxHtml(cs){
   if(t==null)return '<span class="wbox" title="WILCO"></span>';
   if(Date.now()-t<120000)return '<span class="wbox flash" data-wilco="'+cs+'" title="WILCO received \u2014 click to acknowledge">W</span>';
   // after 120s: relaxes to an outline if the audio alert played; stays solid if muted
-  return settings.muted?'<span class="wbox solid" title="WILCO received (muted)"></span>'
+  return isMuted()?'<span class="wbox solid" title="WILCO received (muted)"></span>'
                        :'<span class="wbox done" title="WILCO received"></span>';
 }
 function altCellHtml(a){
@@ -1109,11 +1121,12 @@ function placePop(el,x,y){el.classList.remove('hidden');
 function close(id){document.getElementById(id).classList.add('hidden');}
 document.querySelectorAll('[data-close]').forEach(e=>e.onclick=()=>close(e.dataset.close));
 document.addEventListener('mousedown',ev=>{
-  ['altmenu','routemenu','handoffpop','msgpop','hdgmenu','spdmenu'].forEach(id=>{const el=document.getElementById(id);
+  ['altmenu','routemenu','handoffpop','msgpop','hdgmenu','spdmenu','volpop'].forEach(id=>{const el=document.getElementById(id);
     if(!el.classList.contains('hidden')&&!el.contains(ev.target)
        &&!ev.target.closest('.alt-cell')&&!ev.target.closest('.route-cell')
        &&!ev.target.closest('.hdg-cell')&&!ev.target.closest('.spd-cell')
-       &&!ev.target.closest('[data-fid]')&&!ev.target.closest('[data-msg]'))close(id);});
+       &&!ev.target.closest('[data-fid]')&&!ev.target.closest('[data-msg]')
+       &&ev.target.id!=='btnSound')close(id);});
 });
 
 //============================================================ log + status
@@ -1236,33 +1249,51 @@ function ensureAudio(){
 }
 function beep(freq,dur,delay,vol,type){
   if(!audioCtx)return;
+  const v=(vol||0.12)*volScale();
+  if(v<=0)return;                                  // silent at volume 0 (ramp target must be >0)
   const t=audioCtx.currentTime+(delay||0);
   const o=audioCtx.createOscillator(),g=audioCtx.createGain();
   o.type=type||'sine';o.frequency.value=freq;
   g.gain.setValueAtTime(0.0001,t);
-  g.gain.exponentialRampToValueAtTime(vol||0.12,t+0.012);
+  g.gain.exponentialRampToValueAtTime(v,t+0.012);
   g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
   o.connect(g).connect(audioCtx.destination);o.start(t);o.stop(t+dur+0.03);
 }
 function soundLogon(){soundMessage();}   // logon uses the message (M) chime
 function soundMessage(isRepeat){
-  if(settings.muted||suppressSounds)return;ensureAudio();
+  if(isMuted()||suppressSounds)return;ensureAudio();
   const vol=isRepeat?0.40:0.36;
   beep(520,0.16,0,vol,'triangle');beep(520,0.16,0.20,vol,'triangle');
 }
-function soundWilco(){if(settings.muted||suppressSounds)return;ensureAudio();beep(784,0.12,0,0.36,'sine');beep(1047,0.15,0.10,0.40,'sine');} // rising WILCO chime
-function soundLogonReq(){if(settings.muted||suppressSounds)return;ensureAudio();   // re-logon request: distinct two-tone alert
+function soundWilco(){if(isMuted()||suppressSounds)return;ensureAudio();beep(784,0.12,0,0.36,'sine');beep(1047,0.15,0.10,0.40,'sine');} // rising WILCO chime
+function soundLogonReq(){if(isMuted()||suppressSounds)return;ensureAudio();   // re-logon request: distinct two-tone alert
   beep(988,0.13,0,0.42,'square');beep(740,0.13,0.16,0.42,'square');beep(988,0.16,0.32,0.42,'square');}
 ['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,ensureAudio,{once:true}));   // unlock on first interaction
 
-function updateSoundBtn(){document.getElementById('btnSound').textContent=settings.muted?'SOUND OFF':'SOUND ON';}
+function openVolume(){
+  const b=document.getElementById('btnSound').getBoundingClientRect();
+  const r=document.getElementById('volRange');
+  r.value=Math.round(volScale()*100);
+  document.getElementById('volPct').textContent=r.value+'%';
+  placePop(document.getElementById('volpop'),b.left,b.bottom+4);
+}
 document.getElementById('btnSound').onclick=()=>{
-  settings.muted=!settings.muted;persist();updateSoundBtn();
-  if(settings.muted)Object.keys(msgRepeatTimers).forEach(stopMsgRepeat);
-  else msgAlert.forEach(cs=>startMsgRepeat(cs));
-  if(!settings.muted){ensureAudio();soundLogon();}
+  const p=document.getElementById('volpop');
+  if(!p.classList.contains('hidden')){close('volpop');return;}   // toggle
+  ensureAudio();openVolume();
 };
-updateSoundBtn();
+const volRange=document.getElementById('volRange');
+volRange.addEventListener('input',e=>{
+  const wasMuted=isMuted();
+  settings.volume=(+e.target.value)/100;
+  document.getElementById('volPct').textContent=(+e.target.value)+'%';
+  if(isMuted()!==wasMuted){                                       // mute boundary crossed
+    if(isMuted())Object.keys(msgRepeatTimers).forEach(stopMsgRepeat);
+    else msgAlert.forEach(cs=>startMsgRepeat(cs));
+    renderBoard();                                                // W box: solid (muted) vs done
+  }
+});
+volRange.addEventListener('change',()=>{persist();if(!isMuted()){ensureAudio();soundWilco();}});  // save + preview on release
 
 //============================================================ collapsible log
 function applyLogCollapsed(){
