@@ -263,8 +263,8 @@
 <!-- ROUTE menu -->
 <div id="routemenu" class="pop hidden">
   <div class="hdr"><span class="title" id="rtTitle">ROUTE MENU</span><span class="x" data-close="routemenu">X</span></div>
-  <div class="bar"><span class="chip">TRIAL PLAN</span><span class="chip amend">AMEND</span>
-    <span class="chip uplink" id="rtUplink">DIRECT</span><span class="chip">HOLD</span><span class="chip">DATA</span></div>
+  <div class="bar"><span class="chip amend">AMEND</span>
+    <span class="chip uplink" id="rtUplink">DIRECT</span></div>
   <div class="sectlabel">CURRENT RTE</div><div class="rtearea" id="rtCurrent"></div>
   <div class="sectlabel">CLICK A FIX &mdash; then DIRECT (top) or set a crossing below</div><div class="fixlist" id="fixList"></div>
   <div class="customfix"><span style="color:var(--fg-dim)">other fix:</span>
@@ -839,6 +839,7 @@ function showUplink(id,on){document.getElementById(id).classList.toggle('hidden'
 function openHeadingMenu(idx,x,y){
   const a=displayList()[idx];hdgTarget=a;hdgCmd=null;
   const present=a.hdg||0;
+  const base=norm360(Math.round(present/5)*5);   // round current hdg so all menu options land on 5s
   document.getElementById('hdgAc').textContent=`${a.cs}  ${a.type||''}`;
   document.getElementById('hdgInput').value=present?pad3(present):'';
   showUplink('hdgUplink',false);
@@ -848,7 +849,7 @@ function openHeadingMenu(idx,x,y){
   G.appendChild(hdr);
   for(let k=0;k<12;k++){
     const turn=60-k*5;
-    const hL=norm360(present+50-k*10), hR=norm360(present+55-k*10);
+    const hL=norm360(base+50-k*10), hR=norm360(base+55-k*10);
     const row=document.createElement('div');row.className='hrow';
     const cA=document.createElement('div');cA.className='cellbtn';cA.textContent=pad3(hL);
     const cB=document.createElement('div');cB.className='cellbtn';cB.textContent=pad3(hR);
@@ -856,8 +857,8 @@ function openHeadingMenu(idx,x,y){
     const tR=document.createElement('div');tR.className='cellbtn';tR.textContent=turn;
     cA.onclick=()=>stageHdg(cA,'FLY HEADING',hL);
     cB.onclick=()=>stageHdg(cB,'FLY HEADING',hR);
-    tL.onclick=()=>stageHdg(tL,'TURN LEFT HEADING',norm360(present-turn));
-    tR.onclick=()=>stageHdg(tR,'TURN RIGHT HEADING',norm360(present+turn));
+    tL.onclick=()=>stageHdg(tL,'TURN LEFT HEADING',norm360(base-turn));
+    tR.onclick=()=>stageHdg(tR,'TURN RIGHT HEADING',norm360(base+turn));
     row.appendChild(cA);row.appendChild(cB);row.appendChild(tL);row.appendChild(tR);
     G.appendChild(row);
   }
