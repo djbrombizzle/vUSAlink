@@ -342,8 +342,6 @@ const LS={get:(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e)
           set:(k,v)=>localStorage.setItem(k,JSON.stringify(v))};
 const HUB_FEATURE=true;   // Shared HUB mode (KUSA) — approved by Hoppie owner
 const DEFAULT_HUB_URL='https://web-production-3d9fe.up.railway.app';   // shared KUSA hub, baked in
-const VATSIM_DATA_URL='https://data.vatsim.net/v3/vatsim-data.json';
-const VATSIM_TX_URL='https://data.vatsim.net/v3/transceivers-data.json';
 // This app is hub-only: every controller connects to the shared KUSA hub with just their
 // VATSIM CID. The hub URL is built in, so Settings only asks for the CID. (Solo/direct-Hoppie
 // is retired — a browser can't reach Hoppie directly, which is why the hub exists.)
@@ -394,13 +392,6 @@ function board(){return manual.concat(liveFlights);}
 let sortState={key:null,dir:1};
 function gsOf(a){const m=(a.hs||'').match(/(\d+)/);return m?+m[1]:0;}
 function statusScore(a){return (msgAlert.has(a.cs)?4:0)+(handoffPending.has(a.cs)?2:0)+(connected.has(a.cs)?1:0);}
-function freqToMhz(f){
-  if(f==null||f==='')return null;
-  const n=Number(f);
-  if(!Number.isFinite(n))return null;
-  if(n>1e6)return n/1e6;               // transceiver API: Hz (e.g. 135925000)
-  return n;                             // controller API: MHz string (e.g. 135.925)
-}
 function freqsMatch(a,b){return a!=null&&b!=null&&Math.abs(a-b)<0.0015;}
 function formatFreqMhz(mhz){return mhz==null?'':mhz.toFixed(3);}
 function positionLabelFromCallsign(cs){
@@ -428,33 +419,20 @@ function updatePositionBar(){
     bar.classList.remove('hidden');
   }else bar.classList.add('hidden');
 }
-async function refreshVatsimFeedMeta(){
+function applyFreqMeta(d){
+  // Frequency data is resolved server-side by the hub (no browser CORS fetch of
+  // VATSIM feeds). d.myFreq = our voice freq; d.pilotFreqs = {callsign:[mhz]}.
   if(monitorMode()||(!hubMode()&&!configured())){
     myPosition={callsign:'',label:'',freqMhz:null};pilotFreqs.clear();return;
   }
-  try{
-    const [vData,txData]=await Promise.all([
-      fetch(VATSIM_DATA_URL).then(r=>r.json()),
-      fetch(VATSIM_TX_URL).then(r=>r.json()),
-    ]);
-    pilotFreqs.clear();
-    (txData||[]).forEach(entry=>{
-      const cs=(entry.callsign||'').toUpperCase();if(!cs)return;
-      const freqs=(entry.transceivers||[]).map(t=>freqToMhz(t.frequency)).filter(f=>f!=null);
-      if(freqs.length)pilotFreqs.set(cs,freqs);
-    });
-    const cid=(settings.cid||'').trim();
-    const st=(settings.station||'').trim().toUpperCase();
-    let me=null;
-    if(cid)me=(vData.controllers||[]).find(c=>String(c.cid)===cid);
-    if(!me&&st)me=(vData.controllers||[]).find(c=>(c.callsign||'').toUpperCase()===st);
-    if(me){
-      const freq=freqToMhz(me.frequency);
-      myPosition={callsign:(me.callsign||'').toUpperCase(),label:positionLabelFromCallsign(me.callsign),freqMhz:freq};
-    }else myPosition={callsign:'',label:'',freqMhz:null};
-  }catch(e){
-    myPosition={callsign:'',label:'',freqMhz:null};
-  }
+  const f=(d&&d.myFreq!=null)?Number(d.myFreq):null;
+  if(f!=null&&Number.isFinite(f)){
+    const cs=(d.myCallsign||'').toUpperCase();
+    myPosition={callsign:cs,label:positionLabelFromCallsign(cs),freqMhz:f};
+  }else myPosition={callsign:'',label:'',freqMhz:null};
+  pilotFreqs.clear();
+  const pf=(d&&d.pilotFreqs)||{};
+  Object.keys(pf).forEach(cs=>{const a=pf[cs];if(Array.isArray(a)&&a.length)pilotFreqs.set(cs.toUpperCase(),a);});
 }
 function displayList(){
   let list=board().slice();
@@ -702,8 +680,9 @@ async function refreshVatsim(force){
      ||!handoffpop.classList.contains('hidden')))return;
   setVat('busy','VATSIM '+(airspace||'hub')+' ...');
   try{
-    const [,d]=await Promise.all([refreshVatsimFeedMeta(),api('/api/vatsim',{airspace})]);
+    const d=await api('/api/vatsim',{airspace});
     if(!d.ok){setVat('err',d.error||'vatsim error');updatePositionBar();return;}
+    applyFreqMeta(d);                  // controller freq + pilot freqs come from the hub now
     liveFlights=d.flights.map(mapLive);annotateFlights();facilities=d.facilities||[];
     if(hub){
       hubArtcc=d.airspace||hubArtcc;
