@@ -542,8 +542,11 @@ function updateConnState(connList,pendList,cfmdList){
   if(connList===undefined&&pendList===undefined)return;   // solo poll: managed elsewhere
   const nc=new Set(connList||[]), np=new Set(pendList||[]), nf=new Set(cfmdList||[]);
   let joined=false,reqd=false;
-  nc.forEach(c=>{if(!connected.has(c))joined=true;});
-  np.forEach(c=>{if(!logonReq.has(c))reqd=true;});
+  // only chime for aircraft that would actually appear on this controller's list
+  // (frequency filter off/absent -> all; filter on -> only our frequency)
+  const onList=c=>!freqFilterActive()||pilotMatchesOurFreq(c);
+  nc.forEach(c=>{if(!connected.has(c)&&onList(c))joined=true;});
+  np.forEach(c=>{if(!logonReq.has(c)&&onList(c))reqd=true;});
   connected.clear();nc.forEach(c=>connected.add(c));
   logonReq.clear();np.forEach(c=>logonReq.add(c));
   confirmed.clear();nf.forEach(c=>confirmed.add(c));
