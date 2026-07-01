@@ -201,7 +201,7 @@
 
 <div id="verifyBar" class="hidden">
   <b>VERIFY TO SEND CPDLC</b> &mdash; add this code to your VATSIM controller info / ATIS:
-  <span id="verifyCode">VUSA-----</span>, then wait ~30 s. You can remove it once verified.
+  <span id="verifyCode">VUSA-----</span>, then wait ~30 s. You can remove it once verified &mdash; this device stays verified for 30 days.
   <span id="verifyState">checking&hellip;</span>
 </div>
 <div id="posBar" class="hidden">
@@ -358,6 +358,13 @@ settings.hubUrl=DEFAULT_HUB_URL;          // always the shared hub (ignore any s
 settings.logon='';settings.station='';    // retire any stale solo credentials
 let SID=LS.get('vedst_sid','');
 if(!SID){SID=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():(Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));LS.set('vedst_sid',SID);}
+// Hub-signed "remember verification for 30 days" token, bound to a CID. Stored
+// here and presented on every hub call so an active controller re-pastes the
+// VUSA code at most once a month (survives hub redeploys + browser restarts).
+let VERIFY=LS.get('vedst_verify',{});   // {cid, token}
+function verifyTokenFor(cid){return (VERIFY&&VERIFY.cid===cid&&VERIFY.token)?VERIFY.token:'';}
+function storeVerifyToken(cid,token){if(!token||!cid)return;VERIFY={cid,token};LS.set('vedst_verify',VERIFY);}
+function clearVerifyToken(){if(VERIFY&&VERIFY.token){VERIFY={};LS.set('vedst_verify',VERIFY);}}
 let minCounter=LS.get('vedst_min',1);
 let manual=LS.get('vedst_manual',[]);
 let assigned=LS.get('vedst_assigned',{});
@@ -484,23 +491,28 @@ function hubBase(){return (settings.hubUrl||DEFAULT_HUB_URL).replace(/\/+$/,'');
 async function api(path,extra){
   extra=extra||{};
   if(hubMode()){                      // call the hub directly (works as a static site)
-    const body={cid:(settings.cid||'').trim(),token:settings.hubToken||'',sid:SID};
+    const cid=(settings.cid||'').trim();
+    const body={cid,token:settings.hubToken||'',sid:SID,verifyToken:verifyTokenFor(cid)};
     if(path==='/api/send'){body.to=extra.to||'';body.packet=extra.packet||'';}
     if(path==='/api/conn'){body.to=extra.to||'';body.action=extra.action||'';}
     return (await fetch(hubBase()+HUB_EP[path],{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   }
   const body=Object.assign({logon:settings.logon,from:settings.station,
-    hubUrl:settings.hubUrl,cid:(settings.cid||'').trim(),hubToken:settings.hubToken||'',sid:SID},extra);
+    hubUrl:settings.hubUrl,cid:(settings.cid||'').trim(),hubToken:settings.hubToken||'',sid:SID,
+    verifyToken:verifyTokenFor((settings.cid||'').trim())},extra);
   return (await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
 }
 let verifyOK=true, verifyCode='';
 function applyVerify(v){
   const bar=document.getElementById('verifyBar');if(!bar)return;
   if(!hubMode()||!v){verifyOK=true;bar.classList.add('hidden');return;}
-  if(v.ok){verifyOK=true;bar.classList.add('hidden');}
+  if(v.ok){verifyOK=true;bar.classList.add('hidden');
+    // Hub hands back a fresh 30-day token on verify / sliding-window refresh.
+    if(v.token)storeVerifyToken((settings.cid||'').trim(),v.token);}
   else{
     verifyOK=false;verifyCode=v.code||verifyCode;
+    clearVerifyToken();   // any stored token was rejected/expired -> fall back to the code
     document.getElementById('verifyCode').textContent=verifyCode||'VUSA-----';
     document.getElementById('verifyState').textContent='not verified yet \u2014 add the code, then wait a moment\u2026';
     bar.classList.remove('hidden');
