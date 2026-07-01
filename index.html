@@ -143,6 +143,8 @@
   .msg{border-bottom:1px solid #181818;padding:3px 0;white-space:normal;word-break:break-word}
   .msg .meta{color:var(--fg-dim);font-size:11px}
   .msg.in .dir{color:var(--cyan)} .msg.out .dir{color:var(--amber)} .msg.sys .dir{color:var(--green)} .msg.err{color:#e08a8a}
+  .mitem .dir{font-weight:700;font-size:11px}
+  .mitem.in .dir{color:var(--cyan)} .mitem.out .dir{color:var(--amber)} .mitem.sys .dir{color:var(--green)} .mitem.err .dir{color:#e08a8a}
 
   #scrim{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center}
   #settings{background:#0c0c0c;border:1px solid #666;width:430px;max-width:92vw}
@@ -346,7 +348,7 @@ const DEFAULT_HUB_URL='https://web-production-3d9fe.up.railway.app';   // shared
 // VATSIM CID. The hub URL is built in, so Settings only asks for the CID. (Solo/direct-Hoppie
 // is retired — a browser can't reach Hoppie directly, which is why the hub exists.)
 const WEB_ONLY=true;
-let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',volume:1,logCollapsed:false,viewArtcc:'',showAll:false});
+let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',volume:1,logCollapsed:true,viewArtcc:'',showAll:false});
 if(typeof settings.volume!=='number')settings.volume=(settings.muted===true?0:1);   // migrate old SOUND OFF -> volume 0
 function isMuted(){return !(settings.volume>0);}                 // volume 0 (or unset) = muted
 // settings.volume is the gain multiplier: 1.0 = current sound levels (shown as 50%),
@@ -637,7 +639,6 @@ function pushMessage(cs,text){
   if(myPosition.freqMhz!=null&&!pilotMatchesOurFreq(cs)){
     logMsg('in',cs,text);return;        // other sector position — log only, no M alert
   }
-  (messages[cs]=messages[cs]||[]).push({text:(text||'').replace(/@/g,' '),time:new Date().toLocaleTimeString()});
   msgAlert.add(cs);logMsg('in',cs,text);soundMessage();startMsgRepeat(cs);renderBoard();
 }
 
@@ -1086,11 +1087,12 @@ function openMessages(cs,x,y){
   msgAlert.delete(cs);stopMsgRepeat(cs);renderBoard();
   document.getElementById('mpTitle').textContent='MESSAGES '+cs;
   const L=document.getElementById('mpList');L.innerHTML='';
-  const arr=messages[cs]||[];
-  if(!arr.length){L.innerHTML='<div class="empty">No messages received.</div>';}
-  arr.slice().reverse().forEach(m=>{
-    const d=document.createElement('div');d.className='mitem';
-    d.innerHTML=`<span class="meta">${m.time}</span><br>${esc(m.text)}`;L.appendChild(d);
+  const arr=messages[(cs||'').toUpperCase()]||[];
+  if(!arr.length){L.innerHTML='<div class="empty">No messages.</div>';}
+  arr.slice().reverse().forEach(m=>{                 // newest first
+    const dir=m.kind==='in'?'\u25c0 IN':m.kind==='out'?'\u25b6 OUT':m.kind==='sys'?'\u2713 SYS':m.kind==='err'?'\u26a0 ERR':'';
+    const d=document.createElement('div');d.className='mitem '+(m.kind||'');
+    d.innerHTML=`<span class="dir">${dir}</span> <span class="meta">${m.time}</span><br>${esc(m.text)}`;L.appendChild(d);
   });
   placePop(msgpop,x,y);
 }
@@ -1112,11 +1114,23 @@ document.addEventListener('mousedown',ev=>{
 
 //============================================================ log + status
 const log=document.getElementById('log');
+function csFromWho(who){
+  let w=(who||'').split('\u00b7')[0].trim();            // strip " · co-ctrl" suffix
+  if(w.includes('\u2192'))w=w.split('\u2192')[1].trim();  // "FRM → TO" (feed uplink) -> aircraft (TO)
+  return w.toUpperCase();
+}
+function recordHist(cs,kind,text){
+  if(!cs)return;
+  const arr=(messages[cs]=messages[cs]||[]);
+  arr.push({kind,text:(text||'').replace(/@/g,' '),time:new Date().toLocaleTimeString()});
+  if(arr.length>250)arr.shift();                         // cap per-aircraft history
+}
 function logMsg(kind,who,text){
   const d=document.createElement('div');d.className='msg '+kind;
   const dir=kind==='in'?'\u25c0 IN':kind==='out'?'\u25b6 OUT':kind==='sys'?'\u2713 SYS':'\u26a0 ERR';
   d.innerHTML=`<span class="dir">${dir}</span> <b>${who||''}</b> <span class="meta">${new Date().toLocaleTimeString()}</span><br>${esc((text||'').replace(/@/g,' '))}`;
   log.prepend(d);
+  recordHist(csFromWho(who),kind,text);                  // also keep per-aircraft history for the M popup
 }
 function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 document.getElementById('clearLog').onclick=()=>log.innerHTML='';
@@ -1283,6 +1297,7 @@ function applyLogCollapsed(){
   document.getElementById('logToggle').textContent=(c?'\u25b8':'\u25be')+' DATALINK LOG';
 }
 document.getElementById('logToggle').onclick=()=>{settings.logCollapsed=!settings.logCollapsed;persist();applyLogCollapsed();};
+if(!settings.logCollapseInit){settings.logCollapsed=true;settings.logCollapseInit=true;persist();}  // start collapsed once; never auto-opens on messages
 applyLogCollapsed();
 
 
