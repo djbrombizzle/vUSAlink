@@ -54,9 +54,11 @@
   .wbox{display:inline-block;width:14px;height:14px;border:1px solid #4a4a4a;box-sizing:border-box;
     text-align:center;line-height:13px;color:#000;font-size:10px;font-weight:bold;vertical-align:middle}
   .wbox.flash{background:#fff;border-color:#fff;color:#000;cursor:pointer;animation:wflash .7s steps(1,start) infinite}
+  .wbox.flash-red{background:var(--alert);border-color:var(--alert);color:#fff;cursor:pointer;animation:wflash-red .55s steps(1,start) infinite}
   .wbox.solid{background:#fff;border-color:#fff}      /* muted: stays filled white */
   .wbox.done{background:transparent;border-color:#fff} /* heard the alert: relaxes to outline */
   @keyframes wflash{50%{background:transparent;color:transparent}}
+  @keyframes wflash-red{50%{background:transparent;color:var(--alert)}}
     .fid{font-weight:bold;letter-spacing:.3px;cursor:pointer}
   .fid:hover{color:#fff;text-decoration:underline}
   .fid.conn{color:var(--green)}
@@ -224,7 +226,7 @@
 </table>
 
 <div class="footnote">
-  Boxes: <b>L</b> logon (solid white = on CPDLC; <b>click</b> to force logoff, which disables auto-logon; flashes white + alerts when a force-logged-off aircraft asks to log back on &mdash; click to accept) &middot; <b>M</b> message (flashes red on incoming &mdash; click to read) &middot; <b>H</b> handoff (amber = pending) &middot; <b>W</b> WILCO (flashes white 120s + chime when a pilot WILCOs, then an outline).
+  Boxes: <b>L</b> logon (solid white = on CPDLC; <b>click</b> to force logoff, which disables auto-logon; flashes white + alerts when a force-logged-off aircraft asks to log back on &mdash; click to accept) &middot; <b>M</b> message (flashes red on incoming &mdash; click to read) &middot; <b>H</b> handoff (amber = pending) &middot; <b>W</b> WILCO (flashes white + chime on WILCO/ROGER/ACCEPT; flashes red + alarm if no reply in 2 min &mdash; click to acknowledge).
   Click <b>FLIGHT ID</b> to hand off &middot; <b>ALT</b> for a level &middot; <b>ROUTE</b> for direct. Logons auto-accept unless force-logged off.
 </div>
 
@@ -376,7 +378,9 @@ let hubConnReady=false;                   // suppress logon chime on first hub p
 let pollPrimed=false;                     // first poll after (re)connect replays backlog
 let suppressSounds=false;                 // silence chimes while replaying that backlog
 const msgAlert=new Set();                // M: unread incoming
-const wilcoAt={};                        // W: cs -> timestamp(ms) of last WILCO
+const WILCO_TIMEOUT_MS=120000;           // 2 min without a pilot reply -> red W alarm
+const wilcoUi={};                        // W: cs -> {kind:'received'|'timeout', at:ms}
+const wilcoAwait={};                     // cs -> {min, sentAt, timer} awaiting pilot reply
 const handoffPending=new Set();          // H: awaiting WILCO
 const handoffMin={};                     // cs -> MIN of CONTACT msg
 const altMin={}, rtMin={};               // cs -> MIN of last alt / route uplink
@@ -531,7 +535,9 @@ async function sendCpdlc(to,ra,message,mrn){
     else if(!res||!res.ok){logMsg('err',to,'send failed: '+((res&&res.error)||'unknown'));return null;}
     else if(res.min!=null)finalMin=res.min;        // hub assigns the authoritative MIN
   }catch(e){logMsg('err',to,'proxy error: '+e.message);return null;}
-  burstUntil=Date.now()+90000;return finalMin;
+  burstUntil=Date.now()+90000;
+  if(wilcoExpectsReply(ra))trackWilcoAwait((to||'').toUpperCase(),finalMin);
+  return finalMin;
 }
 async function pollOnce(){
   if(!configured()&&!hubMode())return;
@@ -570,7 +576,68 @@ function schedulePoll(){if(pollTimer)clearTimeout(pollTimer);
   pollTimer=setTimeout(async()=>{await pollOnce();schedulePoll();},base+Math.random()*j);}
 
 //============================================================ incoming handling
-const RESP=/^(WILCO|UNABLE|ROGER|AFFIRM|AFFIRMATIVE|NEGATIVE|STANDBY|LOGOFF|LOGGED OFF)\b/;
+const RESP=/^(WILCO|UNABLE|ROGER|ACCEPT|AFFIRM|AFFIRMATIVE|NEGATIVE|STANDBY|LOGOFF|LOGGED OFF)\b/;
+function wilcoExpectsReply(ra){return ra==='WU'||ra==='R';}
+function isPositiveAck(msg){return /\b(WILCO|ROGER|ACCEPT)\b/.test(msg||'');}
+function clearWilcoAwait(cs){
+  cs=(cs||'').toUpperCase();
+  const a=wilcoAwait[cs];if(a&&a.timer)clearTimeout(a.timer);
+  delete wilcoAwait[cs];
+}
+function trackWilcoAwait(cs,min){
+  cs=(cs||'').toUpperCase();if(!cs)return;
+  clearWilcoAwait(cs);
+  const sentAt=Date.now();
+  wilcoAwait[cs]={min,sentAt,timer:setTimeout(()=>triggerWilcoTimeout(cs),WILCO_TIMEOUT_MS)};
+}
+function triggerWilcoTimeout(cs){
+  cs=(cs||'').toUpperCase();if(!wilcoAwait[cs])return;
+  clearWilcoAwait(cs);
+  wilcoUi[cs]={kind:'timeout',at:Date.now()};
+  if(!isMuted()&&!suppressSounds)soundWilcoTimeout();
+  renderBoard();
+}
+function checkWilcoTimeouts(){
+  const now=Date.now();
+  Object.keys(wilcoAwait).forEach(cs=>{if(now-wilcoAwait[cs].sentAt>=WILCO_TIMEOUT_MS)triggerWilcoTimeout(cs);});
+}
+function recordWilcoReceived(cs){
+  cs=(cs||'').toUpperCase();
+  clearWilcoAwait(cs);
+  wilcoUi[cs]={kind:'received',at:Date.now()};
+  if(!isMuted()&&!suppressSounds)soundWilco();
+  setTimeout(()=>renderBoard(),WILCO_TIMEOUT_MS+1);
+}
+function ackWilcoUi(cs){delete wilcoUi[(cs||'').toUpperCase()];}
+function minMatches(stored,mrn){
+  if(stored==null)return false;
+  const mr=(mrn||'').toString();
+  if(!mr||mr==='0')return true;          // some clients omit or zero the MRN
+  return mr===String(stored);
+}
+function clearPendingOnAck(cs,mrn){
+  cs=(cs||'').toUpperCase();
+  let matched=false;
+  if(handoffMin[cs]!=null&&minMatches(handoffMin[cs],mrn)){
+    connected.delete(cs);handoffPending.delete(cs);delete handoffMin[cs];
+    logMsg('sys',cs,'handoff acknowledged');matched=true;
+  }
+  if(altMin[cs]!=null&&minMatches(altMin[cs],mrn)){altPending.delete(cs);delete altMin[cs];matched=true;}
+  if(rtMin[cs]!=null&&minMatches(rtMin[cs],mrn)){routePending.delete(cs);delete rtMin[cs];matched=true;}
+  if(!matched&&(handoffPending.has(cs)||altPending.has(cs)||routePending.has(cs))){
+    if(handoffPending.has(cs)){connected.delete(cs);handoffPending.delete(cs);delete handoffMin[cs];
+      logMsg('sys',cs,'handoff acknowledged');}
+    if(altPending.has(cs)){altPending.delete(cs);delete altMin[cs];}
+    if(routePending.has(cs)){routePending.delete(cs);delete rtMin[cs];}
+  }
+}
+function clearPendingOnReject(cs,mrn){
+  cs=(cs||'').toUpperCase();
+  if(altMin[cs]!=null&&minMatches(altMin[cs],mrn)){altPending.delete(cs);delete altMin[cs];delete assigned[cs];persist();}
+  else if(altPending.has(cs)){altPending.delete(cs);delete altMin[cs];delete assigned[cs];persist();}
+  if(rtMin[cs]!=null&&minMatches(rtMin[cs],mrn)){routePending.delete(cs);delete rtMin[cs];}
+  else if(routePending.has(cs)){routePending.delete(cs);delete rtMin[cs];}
+}
 function handleIncoming(m){
   const key=m.from+'|'+m.packet;if(seenMsgIds.has(key))return;seenMsgIds.add(key);
   if(m.peer){handlePeerUplink(m);return;}   // a co-controller on our shared position sent this
@@ -582,9 +649,10 @@ function handleIncoming(m){
       if(/REQUEST LOGON/.test(msg)){if(!hubMode())autoAcceptLogon(cs,d.min);return;}
       if(/LOG\s?OFF|LOGGED OFF/.test(msg)){       // aircraft left us (e.g. after a handover)
         connected.delete(cs);handoffPending.delete(cs);delete handoffMin[cs];
+        clearWilcoAwait(cs);ackWilcoUi(cs);
         logMsg('sys',cs,'logged off CPDLC');renderBoard();return;
       }
-      if(RESP.test(msg)){handleResponse(cs,d,msg);return;}
+      if(RESP.test(msg)||isPositiveAck(msg)){handleResponse(cs,d,msg);return;}
       pushMessage(cs,d.message);return;
     }
   }
@@ -601,6 +669,7 @@ function handlePeerUplink(m){
   if(!d){logMsg('out',cs+' \u00b7 co-ctrl',m.packet||'');return;}
   const min=d.min, msg=(d.message||'').toUpperCase().replace(/@/g,'');
   logMsg('out',cs+' \u00b7 co-ctrl',d.message||'');
+  if(wilcoExpectsReply(d.ra))trackWilcoAwait(cs,min);
   if(/REQUEST LOGON|LOGON ACCEPTED/.test(msg)){renderBoard();return;}
   // CPDLC SERVICES TERMINATED is a service advisory, not a handoff (contains CONTACT).
   if(/CPDLC SERVICES TERMINATED/.test(msg)){renderBoard();return;}
@@ -623,18 +692,13 @@ function autoAcceptLogon(cs,theirMin){
 function handleResponse(cs,d,msg){
   if(!pilotMatchesOurFreq(cs))return;   // WILCO belongs to the controller on that voice freq
   logMsg('in',cs,'response: '+msg);
-  const mrn=String(d.mrn);
-  if(/WILCO/.test(msg)){
-    wilcoAt[cs]=Date.now();soundWilco();setTimeout(()=>renderBoard(),120000);  // flash 120s then relax
-    if(handoffMin[cs]!=null&&mrn===String(handoffMin[cs])){
-      connected.delete(cs);handoffPending.delete(cs);delete handoffMin[cs];
-      logMsg('sys',cs,'handoff WILCO \u2014 logged off CPDLC');
-    }
-    if(altMin[cs]!=null&&mrn===String(altMin[cs])){altPending.delete(cs);delete altMin[cs];} // alt -> white
-    if(rtMin[cs]!=null&&mrn===String(rtMin[cs])){routePending.delete(cs);delete rtMin[cs];}   // route -> white
+  const mrn=d.mrn!=null?String(d.mrn):'';
+  if(isPositiveAck(msg)){
+    recordWilcoReceived(cs);
+    clearPendingOnAck(cs,mrn);
   }else if(/UNABLE|NEGATIVE/.test(msg)){
-    if(altMin[cs]!=null&&mrn===String(altMin[cs])){altPending.delete(cs);delete altMin[cs];delete assigned[cs];persist();}
-    if(rtMin[cs]!=null&&mrn===String(rtMin[cs])){routePending.delete(cs);delete rtMin[cs];}
+    clearWilcoAwait(cs);
+    clearPendingOnReject(cs,mrn);
   }
   renderBoard();
 }
@@ -732,10 +796,12 @@ function boxHtml(cs){
         +`<span class="sbox ${handoffPending.has(cs)?'ho':''}" title="handoff">H</span>`;
 }
 function wilcoBoxHtml(cs){
-  const t=wilcoAt[cs];
-  if(t==null)return '<span class="wbox" title="WILCO"></span>';
-  if(Date.now()-t<120000)return '<span class="wbox flash" data-wilco="'+cs+'" title="WILCO received \u2014 click to acknowledge">W</span>';
-  // after 120s: relaxes to an outline if the audio alert played; stays solid if muted
+  const s=wilcoUi[cs];
+  if(!s)return '<span class="wbox" title="WILCO"></span>';
+  if(s.kind==='timeout')
+    return '<span class="wbox flash-red" data-wilco="'+cs+'" title="No response in 2 min \u2014 click to acknowledge">W</span>';
+  if(s.kind==='received'&&Date.now()-s.at<WILCO_TIMEOUT_MS)
+    return '<span class="wbox flash" data-wilco="'+cs+'" title="WILCO/ROGER/ACCEPT received \u2014 click to acknowledge">W</span>';
   return isMuted()?'<span class="wbox solid" title="WILCO received (muted)"></span>'
                        :'<span class="wbox done" title="WILCO received"></span>';
 }
@@ -774,6 +840,7 @@ function updateMode(){
   else{badge.textContent='VIEW ONLY';badge.className='badge view';if(field)field.style.display='';}
 }
 function renderBoard(){
+  checkWilcoTimeouts();
   updateMode();updatePositionBar();
   const list=displayList();rows.innerHTML='';
   list.forEach((a,idx)=>{
@@ -1215,10 +1282,8 @@ document.querySelector('#board thead').addEventListener('click',e=>{
 
 //============================================================ board clicks
 rows.addEventListener('click',e=>{
-  const wbox=e.target.closest('[data-wilco]');     // flashing W: acknowledge -> stop flashing
-  if(wbox){const cs=wbox.dataset.wilco;
-    if(wilcoAt[cs]!=null)wilcoAt[cs]=Date.now()-120001;   // relax to the calm "done" state
-    renderBoard();return;}
+  const wbox=e.target.closest('[data-wilco]');     // flashing W (white or red): acknowledge
+  if(wbox){ackWilcoUi(wbox.dataset.wilco);renderBoard();return;}
   if(!canControl())return;            // VIEW ONLY: board is read-only until verified
   const mbox=e.target.closest('[data-msg]');
   const lbox=e.target.closest('[data-logon]');
@@ -1270,6 +1335,9 @@ function soundMessage(isRepeat){
   beep(520,0.16,0,vol,'triangle');beep(520,0.16,0.20,vol,'triangle');
 }
 function soundWilco(){if(isMuted()||suppressSounds)return;ensureAudio();beep(784,0.12,0,0.36,'sine');beep(1047,0.15,0.10,0.40,'sine');} // rising WILCO chime
+function soundWilcoTimeout(){if(isMuted()||suppressSounds)return;ensureAudio();   // no reply in 2 min: loud alarm burst
+  const v=Math.min(0.95*volScale(),1);
+  [880,1100,880,1100,880].forEach((f,i)=>beep(f,0.08,i*0.09,v,'square'));}
 function soundLogonReq(){if(isMuted()||suppressSounds)return;ensureAudio();   // re-logon request: distinct two-tone alert
   beep(988,0.13,0,0.42,'square');beep(740,0.13,0.16,0.42,'square');beep(988,0.16,0.32,0.42,'square');}
 ['pointerdown','keydown'].forEach(ev=>window.addEventListener(ev,ensureAudio,{once:true}));   // unlock on first interaction
