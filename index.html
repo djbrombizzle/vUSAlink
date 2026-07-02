@@ -238,6 +238,9 @@
     <span class="chip uplink hidden" id="altUplink">UPLINK</span></div>
   <div class="row"><span style="color:var(--fg-dim)">Altitude</span>
     <input id="altInput" autocomplete="off" inputmode="numeric" style="width:96px" placeholder="FL / feet"></div>
+  <div class="row hidden" id="altAltimRow">
+    <span style="color:var(--fg-dim)">Altimeter <span id="altAltimIcao"></span></span>
+    <input id="altAltimInput" autocomplete="off" inputmode="decimal" style="width:72px" placeholder="29.83" title="Override destination altimeter"></div>
   <div class="agrid" id="altList"></div>
 </div>
 
@@ -257,6 +260,7 @@
 <div id="spdmenu" class="pop hidden">
   <div class="hdr"><span class="title">Speed Information</span><span class="x" data-close="spdmenu">X</span></div>
   <div class="acline" id="spdAc">CALLSIGN TYPE</div>
+  <div class="row"><span class="chip cyan" id="spdRns" title="Resume normal speed">RNS</span></div>
   <div class="row"><span class="chip amend">Amend</span><span class="chip">Scratchpad</span>
     <span class="chip uplink hidden" id="spdUplink">UPLINK</span></div>
   <div class="row"><span style="color:var(--fg-dim)">Speed:</span>
@@ -281,6 +285,9 @@
     <input id="xresAlt" placeholder="alt e.g. 14000 / FL240" autocomplete="off" style="width:150px">
     <input id="xresSpd" placeholder="spd e.g. 250" autocomplete="off" style="width:95px">
     <span class="chip uplink" id="xresUplink">UPLINK</span></div>
+  <div class="customfix hidden" id="xresAltimRow">
+    <span style="color:var(--fg-dim)">Altimeter <span id="xresAltimIcao"></span></span>
+    <input id="xresAltimInput" placeholder="29.83" autocomplete="off" inputmode="decimal" style="width:72px" title="Override destination altimeter"></div>
   <div class="sectlabel">EDIT ROUTE &amp; UPLINK</div>
   <div class="customfix"><input id="rtEdit" placeholder="enroute route, e.g. OMN J79 CHS" autocomplete="off" style="min-width:420px">
     <span class="chip cyan" id="rtSendRoute">UPLINK ROUTE</span></div>
@@ -489,7 +496,7 @@ function canControl(){return configured()||(hubMode()&&verifyOK);}   // solo OR 
 function monitorMode(){return !hubMode()&&!configured();}     // VIEW ONLY (no position signed in)
 function monitorArtcc(){return (settings.viewArtcc||'').trim().toUpperCase();}
 function airspaceId(){return (hubMode()?hubArtcc:(settings.airspace||settings.station||'')).trim().toUpperCase();}
-const HUB_EP={'/api/vatsim':'/hub/vatsim','/api/poll':'/hub/poll','/api/send':'/hub/send','/api/conn':'/hub/conn'};
+const HUB_EP={'/api/vatsim':'/hub/vatsim','/api/poll':'/hub/poll','/api/send':'/hub/send','/api/conn':'/hub/conn','/api/altimeter':'/hub/altimeter'};
 function hubBase(){return (settings.hubUrl||DEFAULT_HUB_URL).replace(/\/+$/,'');}
 async function api(path,extra){
   extra=extra||{};
@@ -498,6 +505,7 @@ async function api(path,extra){
     const body={cid,token:settings.hubToken||'',sid:SID,verifyToken:verifyTokenFor(cid)};
     if(path==='/api/send'){body.to=extra.to||'';body.packet=extra.packet||'';}
     if(path==='/api/conn'){body.to=extra.to||'';body.action=extra.action||'';}
+    if(path==='/api/altimeter'){body.icao=extra.icao||'';}
     return (await fetch(hubBase()+HUB_EP[path],{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   }
@@ -853,7 +861,56 @@ function renderBoard(){
 
 //============================================================ ALT menu
 const altmenu=document.getElementById('altmenu');
-let altTarget=null,altSelected=null;
+let altTarget=null,altSelected=null,altAltimManual=false;
+const altimeterCache={};                 // ICAO -> {val, ts}
+function normalizeIcao(icao){
+  icao=(icao||'').trim().toUpperCase();
+  if(icao.length===3&&/^[A-Z]{3}$/.test(icao))return 'K'+icao;
+  return icao;
+}
+function isBelowFl180(fl){return fl!=null&&fl<180;}
+function formatFeetAlt(fl){return (fl*100).toLocaleString('en-US')+'ft';}
+function parseAltitudeInput(s){
+  s=(s||'').replace(/[,\s]/g,'').toUpperCase();
+  if(!s)return null;
+  if(s.startsWith('FL')){const fl=parseInt(s.slice(2),10)||0;return fl?{fl,below180:fl<180}:null;}
+  const n=parseInt(s,10)||0;
+  if(!n)return null;
+  if(n>=1000)return {fl:Math.round(n/100),feet:n,below180:n<18000};
+  if(n<=600)return {fl:n,below180:n<180};
+  return null;
+}
+async function fetchDestAltimeter(icao){
+  icao=normalizeIcao(icao);if(!icao)return null;
+  const hit=altimeterCache[icao];
+  if(hit&&Date.now()-hit.ts<300000)return hit.val;
+  try{
+    const res=await api('/api/altimeter',{icao});
+    if(res&&res.ok&&res.altimeter){
+      altimeterCache[icao]={val:res.altimeter,ts:Date.now()};
+      return res.altimeter;
+    }
+  }catch(e){}
+  return null;
+}
+function altimeterSuffix(icao,altim){
+  icao=normalizeIcao(icao);altim=(altim||'').trim();
+  return (icao&&altim)?`, ${icao} altimeter ${altim}`:'';
+}
+async function populateAltimInput(inputEl,icaoEl,icao,manual){
+  const row=inputEl.closest('.row')||inputEl.closest('.customfix');
+  icao=normalizeIcao(icao);
+  if(!icao){if(row)row.classList.add('hidden');return;}
+  if(icaoEl)icaoEl.textContent=icao;
+  if(row)row.classList.remove('hidden');
+  if(manual||inputEl.dataset.manual)return;
+  inputEl.placeholder='…';
+  const alt=await fetchDestAltimeter(icao);
+  if(!inputEl.dataset.manual){
+    inputEl.value=alt||'';
+    inputEl.placeholder=alt?'29.83':'n/a';
+  }
+}
 function parseAlt(v){
   v=(v||'').replace(/[,\s]/g,'').toUpperCase().replace(/^FL/,'');
   if(!/^\d+$/.test(v))return null;
@@ -862,9 +919,12 @@ function parseAlt(v){
   return (n<10||n>600)?null:n;
 }
 function openAltMenu(idx,x,y){
-  const a=displayList()[idx];altTarget=a;altSelected=null;
+  const a=displayList()[idx];altTarget=a;altSelected=null;altAltimManual=false;
   document.getElementById('altAc').textContent=`${a.cs}  ${a.type||''}`;
   document.getElementById('altInput').value=a.alt?flStr(a.alt):'';
+  document.getElementById('altAltimInput').value='';
+  delete document.getElementById('altAltimInput').dataset.manual;
+  document.getElementById('altAltimRow').classList.add('hidden');
   showUplink('altUplink',false);
   const L=document.getElementById('altList');L.innerHTML='';
   const levels=[];for(let fl=450;fl>=60;fl-=10)levels.push(fl);
@@ -889,17 +949,40 @@ function stageAlt(fl){
   altSelected=fl;altHighlight(fl);
   document.getElementById('altInput').value=flStr(fl);
   showUplink('altUplink',true);
+  syncAltAltimeterRow();
 }
+function syncAltAltimeterRow(){
+  const row=document.getElementById('altAltimRow');
+  if(!altTarget||altSelected==null||!isBelowFl180(altSelected)){
+    row.classList.add('hidden');return;
+  }
+  populateAltimInput(document.getElementById('altAltimInput'),
+    document.getElementById('altAltimIcao'),altTarget.arr,altAltimManual);
+}
+document.getElementById('altAltimInput').addEventListener('input',()=>{
+  altAltimManual=true;
+  document.getElementById('altAltimInput').dataset.manual='1';
+});
 document.getElementById('altInput').addEventListener('input',()=>{
   const fl=parseAlt(document.getElementById('altInput').value);
   altSelected=fl;altHighlight(fl);showUplink('altUplink',fl!=null);
+  if(fl!=null)syncAltAltimeterRow();else document.getElementById('altAltimRow').classList.add('hidden');
 });
 document.getElementById('altUplink').onclick=async()=>{
   if(!altTarget||altSelected==null)return;
   const cs=altTarget.cs,cur=altTarget.alt||0,tgt=altSelected;
-  const verb=tgt>cur?'CLIMB TO AND MAINTAIN':tgt<cur?'DESCEND TO AND MAINTAIN':'MAINTAIN';
+  let msg;
+  if(isBelowFl180(tgt)){
+    const verb=tgt>cur?'CLIMB AND MAINTAIN':tgt<cur?'DESCEND AND MAINTAIN':'MAINTAIN';
+    const dest=normalizeIcao(altTarget.arr);
+    const altim=document.getElementById('altAltimInput').value.trim()||await fetchDestAltimeter(dest);
+    msg=`${verb} ${formatFeetAlt(tgt)}${altimeterSuffix(dest,altim)}`;
+  }else{
+    const verb=tgt>cur?'CLIMB TO AND MAINTAIN':tgt<cur?'DESCEND TO AND MAINTAIN':'MAINTAIN';
+    msg=`${verb} @${flStr(tgt)}@`;
+  }
   close('altmenu');
-  const min=await sendCpdlc(cs,'WU',`${verb} @${flStr(tgt)}@`);
+  const min=await sendCpdlc(cs,'WU',msg);
   if(min!=null){assigned[cs]=tgt;altMin[cs]=min;altPending.add(cs);persist();}
   renderBoard();
 };
@@ -1002,6 +1085,12 @@ function setSpdToggle(t){
 }
 document.getElementById('spdPlus').onclick=()=>setSpdToggle('+');
 document.getElementById('spdMinus').onclick=()=>setSpdToggle('-');
+document.getElementById('spdRns').onclick=()=>{
+  document.getElementById('spdGrid').querySelectorAll('.cellbtn').forEach(e=>e.classList.remove('sel'));
+  document.getElementById('spdInput').value='';
+  spdCmd='RESUME NORMAL SPEED';
+  showUplink('spdUplink',true);
+};
 document.getElementById('spdInput').addEventListener('input',()=>{
   const v=document.getElementById('spdInput').value.trim().toUpperCase();
   if(/^\d{2,3}$/.test(v)){spdCmd=`MAINTAIN @${v}KT@${spdTail()}`;showUplink('spdUplink',true);}
@@ -1015,7 +1104,7 @@ document.getElementById('spdUplink').onclick=async()=>{
 
 //============================================================ ROUTE menu
 const routemenu=document.getElementById('routemenu');
-let rtTarget=null,fixSelected=null;
+let rtTarget=null,fixSelected=null,xresAltimManual=false;
 function openRouteMenu(idx,x,y){
   const a=displayList()[idx];rtTarget=a;fixSelected=null;
   document.getElementById('rtTitle').textContent='ROUTE MENU '+a.cs;
@@ -1029,6 +1118,10 @@ function openRouteMenu(idx,x,y){
   document.getElementById('customFix').value='';
   document.getElementById('xresAlt').value='';document.getElementById('xresSpd').value='';
   document.getElementById('xresBox').classList.add('hidden');
+  document.getElementById('xresAltimRow').classList.add('hidden');
+  document.getElementById('xresAltimInput').value='';
+  delete document.getElementById('xresAltimInput').dataset.manual;
+  xresAltimManual=false;
   document.getElementById('rtEdit').value=a._routeRaw||a.route||'';
   placePop(routemenu,x,y);
 }
@@ -1036,13 +1129,34 @@ function selectFix(fix){
   fixSelected=fix;
   document.getElementById('xresFix').textContent=fix;
   document.getElementById('xresBox').classList.remove('hidden');
+  syncXresAltimeterRow();
 }
 function normSpeed(s){s=s.replace(/\s/g,'').toUpperCase();return /^\d+$/.test(s)?s+'KT':s;}
 function normLevel(s){
-  s=s.replace(/[,\s]/g,'').toUpperCase();
-  if(s.startsWith('FL'))return 'FL'+pad3(parseInt(s.slice(2))||0);
-  const n=parseInt(s)||0;return n<=600?'FL'+pad3(n):String(n);
+  const p=parseAltitudeInput(s);
+  if(!p)return '';
+  if(p.feet!=null&&!s.toUpperCase().includes('FL'))return String(p.feet);
+  return 'FL'+pad3(p.fl);
 }
+function crossAltText(s){
+  const p=parseAltitudeInput(s);
+  if(!p)return '';
+  if(p.below180)return formatFeetAlt(p.fl);
+  return 'FL'+pad3(p.fl);
+}
+function syncXresAltimeterRow(){
+  const alt=document.getElementById('xresAlt').value.trim();
+  const p=alt?parseAltitudeInput(alt):null;
+  const row=document.getElementById('xresAltimRow');
+  if(!rtTarget||!p||!p.below180){row.classList.add('hidden');return;}
+  populateAltimInput(document.getElementById('xresAltimInput'),
+    document.getElementById('xresAltimIcao'),rtTarget.arr,xresAltimManual);
+}
+document.getElementById('xresAlt').addEventListener('input',syncXresAltimeterRow);
+document.getElementById('xresAltimInput').addEventListener('input',()=>{
+  xresAltimManual=true;
+  document.getElementById('xresAltimInput').dataset.manual='1';
+});
 document.getElementById('useCustom').onclick=()=>{
   const v=document.getElementById('customFix').value.trim().toUpperCase();
   if(v){document.querySelectorAll('#fixList .fi').forEach(e=>e.classList.remove('sel'));selectFix(v);}
@@ -1052,10 +1166,17 @@ document.getElementById('xresUplink').onclick=async()=>{
   const alt=document.getElementById('xresAlt').value.trim();
   const spd=document.getElementById('xresSpd').value.trim();
   if(!alt&&!spd)return;
-  const A=alt?normLevel(alt):'',S=spd?normSpeed(spd):'';
-  const msg=(A&&S)?`CROSS @${fixSelected}@ AT @${A}@ AT @${S}@`
+  const altP=alt?parseAltitudeInput(alt):null;
+  const A=alt?(altP&&altP.below180?crossAltText(alt):normLevel(alt)):'';
+  const S=spd?normSpeed(spd):'';
+  let msg=(A&&S)?`CROSS @${fixSelected}@ AT @${A}@ AT @${S}@`
            :A?`CROSS @${fixSelected}@ AT @${A}@`
            :`CROSS @${fixSelected}@ AT @${S}@`;
+  if(altP&&altP.below180){
+    const dest=normalizeIcao(rtTarget.arr);
+    const altim=document.getElementById('xresAltimInput').value.trim()||await fetchDestAltimeter(dest);
+    msg+=altimeterSuffix(dest,altim);
+  }
   const cs=rtTarget.cs;close('routemenu');
   const min=await sendCpdlc(cs,'WU',msg);
   if(min!=null){rtMin[cs]=min;routePending.add(cs);renderBoard();}
