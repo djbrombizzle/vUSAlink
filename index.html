@@ -1129,6 +1129,7 @@ function selectFix(fix){
   fixSelected=fix;
   document.getElementById('xresFix').textContent=fix;
   document.getElementById('xresBox').classList.remove('hidden');
+  syncXresAltimeterRow();
 }
 function normSpeed(s){s=s.replace(/\s/g,'').toUpperCase();return /^\d+$/.test(s)?s+'KT':s;}
 function normLevel(s){
