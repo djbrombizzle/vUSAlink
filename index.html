@@ -224,8 +224,8 @@
 </table>
 
 <div class="footnote">
-  Boxes: <b>L</b> logon (white = on CPDLC; <b>click</b> to force logoff, which disables auto-logon; flashes white + alerts when a force-logged-off aircraft asks to log back on &mdash; click to accept) &middot; <b>M</b> message (flashes red on incoming &mdash; click to read) &middot; <b>H</b> handoff (amber = pending) &middot; <b>W</b> WILCO (flashes white 120s + chime when a pilot WILCOs, then an outline).
-  Click <b>FLIGHT ID</b> to hand off &middot; <b>ALT</b> for a level &middot; <b>ROUTE</b> for direct. Logons auto-accept.
+  Boxes: <b>L</b> logon (solid white = on CPDLC; <b>click</b> to force logoff, which disables auto-logon; flashes white + alerts when a force-logged-off aircraft asks to log back on &mdash; click to accept) &middot; <b>M</b> message (flashes red on incoming &mdash; click to read) &middot; <b>H</b> handoff (amber = pending) &middot; <b>W</b> WILCO (flashes white 120s + chime when a pilot WILCOs, then an outline).
+  Click <b>FLIGHT ID</b> to hand off &middot; <b>ALT</b> for a level &middot; <b>ROUTE</b> for direct. Logons auto-accept unless force-logged off.
 </div>
 
 <!-- ALT menu -->
@@ -371,7 +371,6 @@ let assigned=LS.get('vedst_assigned',{});
 let liveFlights=demoLive();
 let facilities=[];                       // nearby online facilities (handoff targets)
 const connected=new Set();               // green +: on KUSA (hub connection)
-const confirmed=new Set();               // L solid white: pilot rogered CONFIRM CPDLC CONTACT
 const logonReq=new Set();                // L flashes: blocked a/c requesting to log back on
 let hubConnReady=false;                   // suppress logon chime on first hub poll
 let pollPrimed=false;                     // first poll after (re)connect replays backlog
@@ -539,7 +538,7 @@ async function pollOnce(){
   try{const res=await api('/api/poll',{});
     setHoppie(true,hubMode()?('hub '+(hubArtcc||'\u2026')):('online as '+settings.station));
     if(res.error){setHoppie(false,'verify position to send');return;}
-    if(hubMode()){applyVerify(res.verify);updateConnState(res.connected,res.pending,res.confirmed);}
+    if(hubMode()){applyVerify(res.verify);updateConnState(res.connected,res.pending);}
     const batch=res.messages||[];
     if(!pollPrimed){                       // first batch is replayed backlog: sync state silently
       suppressSounds=true;
@@ -550,9 +549,9 @@ async function pollOnce(){
 // Hub is authoritative for who is on CPDLC (connected) and who was force-logged-off
 // and is now asking to come back (pending). Diff against what we had to chime on a
 // new logon and alert on a new re-logon request. Runs every poll (~3s) in hub mode.
-function updateConnState(connList,pendList,cfmdList){
+function updateConnState(connList,pendList){
   if(connList===undefined&&pendList===undefined)return;   // solo poll: managed elsewhere
-  const nc=new Set(connList||[]), np=new Set(pendList||[]), nf=new Set(cfmdList||[]);
+  const nc=new Set(connList||[]), np=new Set(pendList||[]);
   let joined=false,reqd=false;
   // only chime for aircraft that would actually appear on this controller's list
   // (frequency filter off/absent -> all; filter on -> only our frequency)
@@ -561,7 +560,6 @@ function updateConnState(connList,pendList,cfmdList){
   np.forEach(c=>{if(!logonReq.has(c)&&onList(c))reqd=true;});
   connected.clear();nc.forEach(c=>connected.add(c));
   logonReq.clear();np.forEach(c=>logonReq.add(c));
-  confirmed.clear();nf.forEach(c=>confirmed.add(c));
   if(pollPrimed&&!suppressSounds){ if(joined)soundLogon(); if(reqd)soundLogonReq(); }
   hubConnReady=true;renderBoard();
 }
@@ -604,9 +602,8 @@ function handlePeerUplink(m){
   const min=d.min, msg=(d.message||'').toUpperCase().replace(/@/g,'');
   logMsg('out',cs+' \u00b7 co-ctrl',d.message||'');
   if(/REQUEST LOGON|LOGON ACCEPTED/.test(msg)){renderBoard();return;}
-  // CONFIRM CPDLC CONTACT / SERVICES TERMINATED are service advisories, not handoffs
-  // (they contain the word CONTACT) -- log only, never light H.
-  if(/CONFIRM CPDLC CONTACT|CPDLC SERVICES TERMINATED/.test(msg)){renderBoard();return;}
+  // CPDLC SERVICES TERMINATED is a service advisory, not a handoff (contains CONTACT).
+  if(/CPDLC SERVICES TERMINATED/.test(msg)){renderBoard();return;}
   if(/HANDOVER/.test(msg)){
     handoffPending.add(cs);
   }else if(/CONTACT|FREQ CHANGE APPROVED|NO FURTHER ATC/.test(msg)){
@@ -726,12 +723,9 @@ function scheduleVatsim(){if(vatsimTimer)clearInterval(vatsimTimer);
 //============================================================ board
 const rows=document.getElementById('rows');
 function boxHtml(cs){
-  const conn=connected.has(cs), cfmd=confirmed.has(cs), req=logonReq.has(cs);
-  // L is solid only once the pilot has rogered CONFIRM CPDLC CONTACT; a connected
-  // but unconfirmed a/c shows a blank L (still click-to-force-logoff).
-  const lcls=(conn&&cfmd)?'on':(req?'lreq':'');
-  const ltt=(conn&&cfmd)?'CPDLC contact confirmed \u2014 click to force logoff'
-           :conn?'awaiting CPDLC confirmation \u2014 click to force logoff'
+  const conn=connected.has(cs), req=logonReq.has(cs);
+  const lcls=conn?'on':(req?'lreq':'');
+  const ltt=conn?'on CPDLC \u2014 click to force logoff'
            :(req?'requesting logon \u2014 click to accept':'logon');
   return `<span class="sbox lbox ${lcls}" data-logon="${cs}" title="${ltt}">L</span>`
         +`<span class="sbox msgbox ${msgAlert.has(cs)?'flash':''}" data-msg="${cs}" title="message">M</span>`
