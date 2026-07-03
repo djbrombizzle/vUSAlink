@@ -384,6 +384,8 @@ const logonReq=new Set();                // L flashes: blocked a/c requesting to
 let hubConnReady=false;                   // suppress logon chime on first hub poll
 let pollPrimed=false;                     // first poll after (re)connect replays backlog
 let suppressSounds=false;                 // silence chimes while replaying that backlog
+let listSoundPrimed=false;                // first list snapshot after poll primed: no chime
+const prevDisplayedConnected=new Set();   // connected a/c on controller list last render
 const msgAlert=new Set();                // M: unread incoming
 const WILCO_TIMEOUT_MS=120000;           // 2 min without a pilot reply -> red W alarm
 const wilcoUi={};                        // W: cs -> {kind:'received'|'timeout', at:ms}
@@ -567,15 +569,14 @@ async function pollOnce(){
 function updateConnState(connList,pendList){
   if(connList===undefined&&pendList===undefined)return;   // solo poll: managed elsewhere
   const nc=new Set(connList||[]), np=new Set(pendList||[]);
-  let joined=false,reqd=false;
-  // only chime for aircraft that would actually appear on this controller's list
+  let reqd=false;
+  // only alert for aircraft that would actually appear on this controller's list
   // (frequency filter off/absent -> all; filter on -> only our frequency)
   const onList=c=>!freqFilterActive()||pilotMatchesOurFreq(c);
-  nc.forEach(c=>{if(!connected.has(c)&&onList(c))joined=true;});
   np.forEach(c=>{if(!logonReq.has(c)&&onList(c))reqd=true;});
   connected.clear();nc.forEach(c=>connected.add(c));
   logonReq.clear();np.forEach(c=>logonReq.add(c));
-  if(pollPrimed&&!suppressSounds){ if(joined)soundLogon(); if(reqd)soundLogonReq(); }
+  if(pollPrimed&&!suppressSounds){ if(reqd)soundLogonReq(); }
   hubConnReady=true;renderBoard();
 }
 function schedulePoll(){if(pollTimer)clearTimeout(pollTimer);
@@ -696,7 +697,7 @@ function handlePeerUplink(m){
 }
 function autoAcceptLogon(cs,theirMin){
   sendCpdlc(cs,'N','LOGON ACCEPTED',theirMin);
-  connected.add(cs);logMsg('sys',cs,'logon auto-accepted \u2014 CPDLC connected');soundLogon();renderBoard();
+  connected.add(cs);logMsg('sys',cs,'logon auto-accepted \u2014 CPDLC connected');renderBoard();
 }
 function handleResponse(cs,d,msg){
   if(!pilotMatchesOurFreq(cs))return;   // WILCO belongs to the controller on that voice freq
@@ -851,7 +852,17 @@ function updateMode(){
 function renderBoard(){
   checkWilcoTimeouts();
   updateMode();updatePositionBar();
-  const list=displayList();rows.innerHTML='';
+  const list=displayList();
+  const onListConnected=new Set(list.filter(a=>connected.has(a.cs)).map(a=>a.cs));
+  if(pollPrimed&&!suppressSounds&&!isMuted()){
+    if(listSoundPrimed){
+      for(const cs of onListConnected){
+        if(!prevDisplayedConnected.has(cs)){soundLogon();break;}
+      }
+    }else listSoundPrimed=true;
+  }
+  prevDisplayedConnected.clear();onListConnected.forEach(cs=>prevDisplayedConnected.add(cs));
+  rows.innerHTML='';
   list.forEach((a,idx)=>{
     const tr=document.createElement('tr');
     if(a.cat==='ADJ')tr.classList.add('adj');
