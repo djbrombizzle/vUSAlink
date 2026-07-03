@@ -296,12 +296,11 @@ def fmt_type(fp):
     return m.group(1) if m else ac
 
 
-# ---- navdata (optional): expands airways + resolves fix coordinates -----------
-# Drop a navdata.json next to the app/hub to enable airway expansion + coords:
-#   {"fixes":   {"OMN": [29.06, -81.28], ...},
-#    "airways": {"J79": ["OMN","CRG","SAV", ...], ...}}
-# Without the file, route parsing still works -- airways just aren't expanded.
-_navdata = {"fixes": {}, "airways": {}, "loaded": False}
+# ---- navdata (optional): airways, fix coords, SID/STAR expansion ---------------
+# See NAVDATA.md in vusalink-hub for schema and rebuild instructions.
+from route_engine import configure_navdata, expand_route as _expand_route
+
+_navdata = {"fixes": {}, "airways": {}, "procedures": {}, "loaded": False}
 
 def load_navdata():
     if _navdata["loaded"]:
@@ -311,69 +310,35 @@ def load_navdata():
     try:
         with open(path) as f:
             d = json.load(f)
-        _navdata["fixes"] = {str(k).upper(): (float(v[0]), float(v[1]))
-                             for k, v in d.get("fixes", {}).items() if v and len(v) >= 2}
-        _navdata["airways"] = {str(k).upper(): [str(x).upper() for x in v]
-                               for k, v in d.get("airways", {}).items()}
-        sys.stderr.write("navdata loaded: %d fixes, %d airways\n"
-                         % (len(_navdata["fixes"]), len(_navdata["airways"])))
+        fixes = {}
+        for k, v in d.get("fixes", {}).items():
+            cands = []
+            if v and isinstance(v[0], (int, float)):
+                cands = [(float(v[0]), float(v[1]))]
+            else:
+                for pt in v or []:
+                    if pt and len(pt) >= 2:
+                        cands.append((float(pt[0]), float(pt[1])))
+            if cands:
+                fixes[str(k).upper()] = cands
+        airways = {str(k).upper(): [str(x).upper() for x in v]
+                   for k, v in d.get("airways", {}).items()}
+        procedures = {str(k).upper(): v for k, v in d.get("procedures", {}).items()}
+        _navdata["fixes"] = fixes
+        _navdata["airways"] = airways
+        _navdata["procedures"] = procedures
+        configure_navdata(fixes, airways, procedures)
+        sys.stderr.write("navdata loaded: %d fixes, %d airways, %d procedures\n"
+                         % (len(fixes), len(airways), len(procedures)))
     except Exception:
         pass  # no navdata -> graceful fallback to filed fixes only
     return _navdata
 
 
-_AWY_RE = re.compile(r"^[A-Z]{1,2}\d{1,4}$")           # J79, V123, Q42, T270
-_SIDSTAR_RE = re.compile(r"^([A-Z]{2,5})\d[A-Z]?$")     # SCEND3, BAGGS1A -> base
-_COORD_RE = re.compile(r"^\d{2,4}[NS]\d{3,5}[EW]$")     # 30N080W style
-
-def _airway_interior(seq, a, b):
-    """Interior fixes of airway `seq` strictly between filed fixes a and b."""
-    if a and b and a in seq and b in seq:
-        i, j = seq.index(a), seq.index(b)
-        return seq[i + 1:j] if i <= j else list(reversed(seq[j + 1:i]))
-    return []
-
 def expand_route(route, dep="", arr=""):
-    """Ordered [{name, lat?, lon?}] for a filed route. With navdata, airways
-    between two filed fixes are expanded into their interior fixes and coords are
-    attached; without it, just the filed fixes are returned."""
-    nd = load_navdata()
-    fixes, airways = nd["fixes"], nd["airways"]
-    toks = [t for t in re.split(r"[.\s]+", (route or "").upper()) if t]
-    clean = []
-    for t in toks:
-        if t in ("DCT", "DIRECT", "SID", "STAR"):
-            continue
-        if "/" in t:
-            t = t.split("/")[0]
-        if not t or _COORD_RE.match(t):
-            continue
-        clean.append(t)
-    names, prev = [], None
-    for i, t in enumerate(clean):
-        if _AWY_RE.match(t):
-            if t in airways:
-                nxt = next((clean[j] for j in range(i + 1, len(clean))
-                            if not _AWY_RE.match(clean[j])), None)
-                for f in _airway_interior(airways[t], prev, nxt):
-                    if not names or names[-1] != f:
-                        names.append(f)
-            continue
-        m = _SIDSTAR_RE.match(t)
-        if m and t not in fixes and m.group(1) in fixes:
-            t = m.group(1)
-        elif m and not fixes and m.group(1) != t:
-            t = m.group(1)
-        if not re.match(r"^[A-Z]{2,5}$", t):
-            continue
-        if not names or names[-1] != t:
-            names.append(t)
-        prev = t
-    out = []
-    for n in names:
-        c = fixes.get(n)
-        out.append({"name": n, "lat": c[0], "lon": c[1]} if c else {"name": n})
-    return out
+    """Ordered [{name, lat?, lon?}] for a filed route with airway + SID/STAR expansion."""
+    load_navdata()
+    return _expand_route(route, dep=dep, arr=arr)
 
 
 def match_fir(callsign, firs):

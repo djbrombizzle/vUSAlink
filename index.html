@@ -470,14 +470,15 @@ function routeFixNames(a){
   return parseFixes((a&&(a._routeRaw||a.route))||'');
 }
 function parseFixes(route){
+  // Offline/demo fallback only — hub routeFixes includes full SID/STAR expansion.
   const SKIP=new Set(['DCT','SID','STAR','DIRECT']);const out=[];
   for(let t of (route||'').split(/[.\s]+/).filter(Boolean)){
     if(SKIP.has(t)||t.includes('/'))continue;
-    if(/^[A-Z]{1,2}\d{1,4}$/.test(t))continue;
+    if(/^[JQV]\d+[A-Z]?$/i.test(t))continue;
     let m;
     if((m=t.match(/^([A-Z]{3,5})\d{4,6}$/)))t=m[1];
-    else if((m=t.match(/^([A-Z]{3,5})\d[A-Z]?$/)))t=m[1];
-    if(/^[A-Z]{2,5}$/.test(t)&&!out.includes(t))out.push(t);
+    else if((m=t.match(/^([A-Z]{2,6})\d[A-Z]?$/)))t=m[1];
+    if(/^[A-Z]{2,6}$/.test(t)&&!out.includes(t))out.push(t);
   }
   return out;
 }
