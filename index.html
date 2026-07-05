@@ -881,7 +881,10 @@ let altTarget=null,altSelected=null,altAltimManual=false;
 const altimeterCache={};                 // ICAO -> {val, ts}
 function normalizeIcao(icao){
   icao=(icao||'').trim().toUpperCase();
-  if(icao.length===3&&/^[A-Z]{3}$/.test(icao))return 'K'+icao;
+  if(icao.length===3&&/^[A-Z]{3}$/.test(icao)){
+    if(icao[0]==='Y')return 'C'+icao;   // Canadian IATA (YYZ -> CYYZ)
+    return 'K'+icao;
+  }
   return icao;
 }
 function isBelowFl180(fl){return fl!=null&&fl<180;}
@@ -909,10 +912,6 @@ async function fetchDestAltimeter(icao){
   }catch(e){}
   return null;
 }
-function altimeterSuffix(icao,altim){
-  icao=normalizeIcao(icao);altim=(altim||'').trim();
-  return (icao&&altim)?`, ${icao} altimeter ${altim}`:'';
-}
 async function populateAltimInput(inputEl,icaoEl,icao,manual){
   const row=inputEl.closest('.row')||inputEl.closest('.customfix');
   icao=normalizeIcao(icao);
@@ -920,12 +919,17 @@ async function populateAltimInput(inputEl,icaoEl,icao,manual){
   if(icaoEl)icaoEl.textContent=icao;
   if(row)row.classList.remove('hidden');
   if(manual||inputEl.dataset.manual)return;
+  const req=icao;
   inputEl.placeholder='…';
-  const alt=await fetchDestAltimeter(icao);
-  if(!inputEl.dataset.manual){
-    inputEl.value=alt||'';
-    inputEl.placeholder=alt?'29.83':'n/a';
-  }
+  inputEl.value='';
+  const alt=await fetchDestAltimeter(req);
+  if(manual||inputEl.dataset.manual||normalizeIcao(icaoEl&&icaoEl.textContent)!==req)return;
+  inputEl.value=alt||'';
+  inputEl.placeholder=alt?'29.83':'n/a';
+}
+function altimeterSuffix(icao,altim){
+  icao=normalizeIcao(icao);altim=(altim||'').trim();
+  return (icao&&altim)?`, ${icao} altimeter ${altim}`:'';
 }
 function parseAlt(v){
   v=(v||'').replace(/[,\s]/g,'').toUpperCase().replace(/^FL/,'');

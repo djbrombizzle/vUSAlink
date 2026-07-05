@@ -39,12 +39,65 @@ GROUND_GS = 50        # kts; at/below this we treat the aircraft as on the groun
 LOW_ARR_FT = 2000     # arrivals below this altitude are dropped (landing)
 HANDOFF_RANGE_NM = 200
 BUFFER_NM = 20        # show aircraft this far OUTSIDE a center's border (lead time)
+METAR_URL = "https://aviationweather.gov/api/data/metar"
+_altimeter_cache = {}
+_altimeter_lock = threading.Lock()
 
 
 def fetch_url(url, timeout=20):
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
+
+
+def normalize_icao(icao):
+    icao = (icao or "").strip().upper()
+    if len(icao) == 3 and icao.isalpha():
+        if icao[0] == "Y":
+            return "C" + icao
+        return "K" + icao
+    return icao
+
+
+def parse_metar_altimeter(ob):
+    raw = ob.get("rawOb") or ""
+    m = re.search(r"\bA(\d{4})\b", raw)
+    if m:
+        return "%.2f" % (int(m.group(1)) / 100.0)
+    m = re.search(r"\bQ(\d{4})\b", raw)
+    if m:
+        return "%.2f" % (int(m.group(1)) * 0.02953)
+    altim = ob.get("altim")
+    if altim is not None:
+        try:
+            return "%.2f" % (float(altim) * 0.02953)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def fetch_altimeter(icao):
+    icao = normalize_icao(icao)
+    if not re.match(r"^[A-Z]{4}$", icao):
+        return None, "invalid airport id"
+    now = time.time()
+    with _altimeter_lock:
+        hit = _altimeter_cache.get(icao)
+        if hit and now - hit[0] < 300:
+            return hit[1], None
+    try:
+        q = urllib.parse.urlencode({"ids": icao, "format": "json"})
+        data = json.loads(fetch_url(METAR_URL + "?" + q, timeout=12))
+    except Exception as e:
+        return None, "metar fetch failed: %s" % e
+    if not data:
+        return None, "no metar for %s" % icao
+    alt = parse_metar_altimeter(data[0])
+    if not alt:
+        return None, "no altimeter in metar"
+    with _altimeter_lock:
+        _altimeter_cache[icao] = (now, alt)
+    return alt, None
 
 
 # ---------------- Hoppie ----------------
@@ -535,6 +588,9 @@ class Handler(BaseHTTPRequestHandler):
                 elif self.path == "/api/send":
                     out = hub_post(hub_url, "/hub/send", dict(base,
                         to=(payload.get("to") or "").strip(), packet=payload.get("packet") or ""))
+                elif self.path == "/api/altimeter":
+                    out = hub_post(hub_url, "/hub/altimeter", dict(base,
+                        icao=(payload.get("icao") or "").strip().upper()))
                 else:
                     self._json({"ok": False, "error": "unknown endpoint"}, 404); return
                 self._json(out)
@@ -552,6 +608,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(out)
             except Exception as e:
                 self._json({"ok": False, "error": "vatsim fetch failed: %s" % e}, 502)
+            return
+
+        if self.path == "/api/altimeter":
+            icao = (payload.get("icao") or "").strip()
+            alt, err = fetch_altimeter(icao)
+            if err:
+                self._json({"ok": False, "error": err}, 404 if "no metar" in err else 400)
+            else:
+                self._json({"ok": True, "icao": normalize_icao(icao), "altimeter": alt})
             return
 
         logon = (payload.get("logon") or "").strip()
