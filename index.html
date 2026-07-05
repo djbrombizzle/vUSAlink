@@ -683,10 +683,10 @@ function handlePeerUplink(m){
   if(!d){logMsg('out',cs+' \u00b7 co-ctrl',m.packet||'');return;}
   const min=d.min, msg=(d.message||'').toUpperCase().replace(/@/g,'');
   logMsg('out',cs+' \u00b7 co-ctrl',d.message||'');
-  if(wilcoExpectsReply(d.ra))trackWilcoAwait(cs,min);
   if(/REQUEST LOGON|LOGON ACCEPTED/.test(msg)){renderBoard();return;}
   // CPDLC SERVICES TERMINATED is a service advisory, not a handoff (contains CONTACT).
   if(/CPDLC SERVICES TERMINATED/.test(msg)){renderBoard();return;}
+  if(wilcoExpectsReply(d.ra))trackWilcoAwait(cs,min);
   if(/HANDOVER/.test(msg)){
     handoffPending.add(cs);
   }else if(/CONTACT|FREQ CHANGE APPROVED|NO FURTHER ATC/.test(msg)){
@@ -708,7 +708,8 @@ function handleResponse(cs,d,msg){
   logMsg('in',cs,'response: '+msg);
   const mrn=d.mrn!=null?String(d.mrn):'';
   if(isPositiveAck(msg)){
-    recordWilcoReceived(cs);
+    if(wilcoAwait[cs])recordWilcoReceived(cs);
+    else{clearWilcoAwait(cs);ackWilcoUi(cs);}   // e.g. ROGER to CPDLC SERVICES TERMINATED: no chime
     clearPendingOnAck(cs,mrn);
   }else if(/UNABLE|NEGATIVE/.test(msg)){
     clearWilcoAwait(cs);
