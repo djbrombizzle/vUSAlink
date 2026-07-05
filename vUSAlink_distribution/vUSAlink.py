@@ -302,28 +302,67 @@ from route_engine import configure_navdata, expand_route as _expand_route
 
 _navdata = {"fixes": {}, "airways": {}, "procedures": {}, "loaded": False}
 
+
+def _parse_fixes(raw_fixes):
+    fixes = {}
+    for k, v in (raw_fixes or {}).items():
+        cands = []
+        if v and isinstance(v[0], (int, float)):
+            cands = [(float(v[0]), float(v[1]))]
+        else:
+            for pt in v or []:
+                if pt and len(pt) >= 2:
+                    cands.append((float(pt[0]), float(pt[1])))
+        if cands:
+            fixes[str(k).upper()] = cands
+    return fixes
+
+
+def _merge_procedures(target, src):
+    for k, v in (src or {}).items():
+        target[str(k).upper()] = v
+
+
+def _procedure_paths(base_dir):
+    paths = []
+    env_proc = os.environ.get("VEDST_PROCEDURES", "").strip()
+    if env_proc:
+        paths.append(env_proc)
+    for name in ("procedures.json", "procedures-ca.json"):
+        p = os.path.join(base_dir, name)
+        if os.path.isfile(p):
+            paths.append(p)
+    licensed = os.environ.get("VEDST_NAVCANADA_PROCEDURES", "").strip()
+    if licensed:
+        paths.append(licensed)
+    return paths
+
+
 def load_navdata():
     if _navdata["loaded"]:
         return _navdata
     _navdata["loaded"] = True
     path = os.environ.get("VEDST_NAVDATA", "navdata.json")
+    base_dir = os.path.dirname(os.path.abspath(path)) or "."
     try:
         with open(path) as f:
             d = json.load(f)
-        fixes = {}
-        for k, v in d.get("fixes", {}).items():
-            cands = []
-            if v and isinstance(v[0], (int, float)):
-                cands = [(float(v[0]), float(v[1]))]
-            else:
-                for pt in v or []:
-                    if pt and len(pt) >= 2:
-                        cands.append((float(pt[0]), float(pt[1])))
-            if cands:
-                fixes[str(k).upper()] = cands
+        fixes = _parse_fixes(d.get("fixes", {}))
         airways = {str(k).upper(): [str(x).upper() for x in v]
                    for k, v in d.get("airways", {}).items()}
         procedures = {str(k).upper(): v for k, v in d.get("procedures", {}).items()}
+        for proc_path in _procedure_paths(base_dir):
+            try:
+                with open(proc_path) as pf:
+                    pd = json.load(pf)
+                if isinstance(pd, dict) and pd and next(iter(pd.values()), None):
+                    sample = next(iter(pd.values()))
+                    if isinstance(sample, dict) and sample.get("type"):
+                        _merge_procedures(procedures, pd)
+                    else:
+                        _merge_procedures(procedures, pd.get("procedures", pd))
+            except Exception as e:
+                sys.stderr.write("navdata: skip procedures %s: %s\n" % (proc_path, e))
         _navdata["fixes"] = fixes
         _navdata["airways"] = airways
         _navdata["procedures"] = procedures
@@ -336,9 +375,21 @@ def load_navdata():
 
 
 def expand_route(route, dep="", arr=""):
-    """Ordered [{name, lat?, lon?}] for a filed route with airway + SID/STAR expansion."""
+    """Ordered [{name, lat?, lon?, kind?}] for a filed route with airway + SID/STAR expansion."""
     load_navdata()
-    return _expand_route(route, dep=dep, arr=arr)
+    nd = {
+        "fixes": _navdata["fixes"],
+        "airways": _navdata["airways"],
+        "procedures": _navdata["procedures"],
+        "airports": _navdata.get("airports") or {},
+    }
+    if not nd["airports"]:
+        try:
+            apts, _ = get_vatspy()
+            nd["airports"] = {k: (v["lat"], v["lon"]) for k, v in apts.items()}
+        except Exception:
+            nd["airports"] = {}
+    return _expand_route(route, dep=dep, arr=arr, navdata=nd)
 
 
 def match_fir(callsign, firs):

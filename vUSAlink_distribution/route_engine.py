@@ -1,13 +1,12 @@
-"""US enroute route expansion — fixes, airways, SID/STAR (mirrors VATFLOW route-engine.js)."""
+"""Enroute route expansion — fixes, airways, SID/STAR (mirrors VATFLOW route-engine.js)."""
 
 import math
 import re
 
 _AWY_RE = re.compile(r"^[JQV]\d+[A-Z]?$", re.I)
-_STAR_SID_RE = re.compile(r"^[A-Z]{3,6}\d[A-Z]?$", re.I)
 _COORD_RE = re.compile(r"^\d{2,4}[NS]\d{3,5}[EW]$")
 
-_navdata = {"fixes": {}, "airways": {}, "procedures": {}, "loaded": False}
+_navdata = {"fixes": {}, "airways": {}, "procedures": {}, "airports": {}, "loaded": False}
 
 
 def _haversine_nm(la1, lo1, la2, lo2):
@@ -48,11 +47,12 @@ def _normalize_fix_entry(v):
     return out
 
 
-def configure_navdata(fixes, airways, procedures=None):
+def configure_navdata(fixes, airways, procedures=None, airports=None):
     """Load nav maps (for tests or after load_navdata())."""
     _navdata["fixes"] = fixes or {}
     _navdata["airways"] = airways or {}
     _navdata["procedures"] = procedures or {}
+    _navdata["airports"] = airports or {}
     _navdata["loaded"] = True
 
 
@@ -60,6 +60,7 @@ def reset_navdata():
     _navdata["fixes"] = {}
     _navdata["airways"] = {}
     _navdata["procedures"] = {}
+    _navdata["airports"] = {}
     _navdata["loaded"] = False
 
 
@@ -73,16 +74,34 @@ def parse_route_tokens(route):
     return [
         t
         for t in re.sub(r"[\n\r]", " ", route.upper()).split()
-        if t and t != "DCT"
+        if t and t not in ("DCT", "DIRECT", "SID", "STAR")
     ]
 
 
-def _find_procedure(proc_id, procedures):
+def _procedure_matches(proc, dep="", arr="", prefer=""):
+    apts = [a.upper() for a in (proc or {}).get("apt") or []]
+    if not apts:
+        return True
+    if prefer == "SID" and dep and dep in apts:
+        return True
+    if prefer == "STAR" and arr and arr in apts:
+        return True
+    if dep and dep in apts:
+        return True
+    if arr and arr in apts:
+        return True
+    return not (dep or arr)
+
+
+def _find_procedure(proc_id, procedures, dep="", arr="", route_pos=0, n_tokens=0):
     key = _clean_token(proc_id)
     if not key:
         return None
+    prefer = "SID" if route_pos < max(1, n_tokens // 3) else "STAR"
     if key in procedures:
-        return procedures[key]
+        proc = procedures[key]
+        if _procedure_matches(proc, dep, arr, prefer):
+            return proc
     m = re.match(r"^([A-Z]{3,6})\d[A-Z]?$", key)
     if not m:
         return None
@@ -90,7 +109,15 @@ def _find_procedure(proc_id, procedures):
     matches = [k for k in procedures if k.startswith(pfx) and procedures[k].get("type")]
     if not matches:
         return None
-    pick = key if key in matches else sorted(matches, key=len)[0]
+    ranked = sorted(
+        matches,
+        key=lambda k: (
+            0 if _procedure_matches(procedures[k], dep, arr, prefer) else 1,
+            0 if key in k else 1,
+            len(k),
+        ),
+    )
+    pick = ranked[0]
     return procedures.get(pick)
 
 
@@ -120,12 +147,25 @@ def _expand_procedure(proc, transition=None):
     return [(leg[0], leg[1], leg[2]) for leg in legs if leg and len(leg) >= 3]
 
 
-def _resolve_fix(name, fixes, ref_ll=None, dep="", arr=""):
+def _apt_ll(icao, airports):
+    icao = (icao or "").upper()
+    if not icao:
+        return None
+    apt = airports.get(icao)
+    if apt and len(apt) >= 2:
+        return (float(apt[0]), float(apt[1]))
+    return None
+
+
+def _resolve_fix(name, fixes, ref_ll=None, dep="", arr="", airports=None):
     fid = _clean_token(name)
     if not fid or len(fid) < 2:
         return None
-    if fid in (dep.upper(), arr.upper()):
+    if fid in ((dep or "").upper(), (arr or "").upper()):
         return None
+    airports = airports or {}
+    if not ref_ll:
+        ref_ll = _apt_ll(dep, airports) or _apt_ll(arr, airports)
     if fid in fixes:
         cands = fixes[fid]
         ll = _nearest_candidate(cands, ref_ll)
@@ -145,24 +185,33 @@ def _airway_interior(seq, a, b):
     return []
 
 
-def _append_name(names, n):
-    if n and (not names or names[-1] != n):
-        names.append(n)
+def _append_item(items, name, kind, lat=None, lon=None):
+    if not name:
+        return
+    if items and items[-1]["name"] == name and items[-1].get("kind") == kind:
+        return
+    item = {"name": name, "kind": kind}
+    if lat is not None and lon is not None:
+        item["lat"] = lat
+        item["lon"] = lon
+    items.append(item)
 
 
 def expand_route(route, dep="", arr="", navdata=None):
-    """Ordered [{name, lat?, lon?}] for a filed route with airway + SID/STAR expansion."""
+    """Ordered [{name, lat?, lon?, kind?}] for a filed route with airway + SID/STAR expansion."""
     nd = navdata if navdata is not None else _navdata
     fixes = nd.get("fixes") or {}
     airways = nd.get("airways") or {}
     procedures = nd.get("procedures") or {}
+    airports = nd.get("airports") or {}
     dep = (dep or "").upper()
     arr = (arr or "").upper()
 
     tokens = parse_route_tokens(route)
-    names = []
-    ref_ll = None
+    items = []
+    ref_ll = _apt_ll(dep, airports) or _apt_ll(arr, airports)
     prev = None
+    n = len(tokens)
 
     for i, raw in enumerate(tokens):
         tok = _clean_token(raw)
@@ -170,9 +219,8 @@ def expand_route(route, dep="", arr="", navdata=None):
             continue
 
         next_tok = _clean_token(tokens[i + 1]) if i + 1 < len(tokens) else ""
-        next_proc = _find_procedure(next_tok, procedures) if next_tok else None
+        next_proc = _find_procedure(next_tok, procedures, dep, arr, i + 1, n) if next_tok else None
 
-        # Transition fix before STAR/SID — consumed by procedure expansion
         if next_proc and next_proc.get("transitions", {}).get(tok):
             continue
 
@@ -182,7 +230,7 @@ def expand_route(route, dep="", arr="", navdata=None):
                 for j in range(i + 1, len(tokens)):
                     nt = _clean_token(tokens[j])
                     if not _is_airway_token(nt):
-                        resolved = _resolve_fix(nt, fixes, ref_ll, dep, arr)
+                        resolved = _resolve_fix(nt, fixes, ref_ll, dep, arr, airports)
                         if resolved:
                             nxt = resolved["name"]
                             break
@@ -190,46 +238,50 @@ def expand_route(route, dep="", arr="", navdata=None):
                             nxt = nt
                             break
                 for f in _airway_interior(airways[tok], prev, nxt):
-                    _append_name(names, f)
+                    _append_item(items, f, "enroute")
                     prev = f
                     if f in fixes:
                         ll = _nearest_candidate(fixes[f], ref_ll)
                         if ll:
                             ref_ll = ll
+                            items[-1]["lat"] = ll[0]
+                            items[-1]["lon"] = ll[1]
             continue
 
-        proc = _find_procedure(tok, procedures)
+        proc = _find_procedure(tok, procedures, dep, arr, i, n)
         if proc:
             prev_tok = _clean_token(tokens[i - 1]) if i > 0 else ""
             transition = prev_tok if proc.get("transitions", {}).get(prev_tok) else None
+            kind = "sid" if proc.get("type") == "SID" else "star"
             for leg in _expand_procedure(proc, transition):
-                _append_name(names, leg[0])
+                _append_item(items, leg[0], kind, leg[1], leg[2])
                 prev = leg[0]
                 ref_ll = (leg[1], leg[2])
             continue
 
-        # Legacy fallback when procedure data is unavailable
         m = re.match(r"^([A-Z]{2,6})\d[A-Z]?$", tok)
         if m:
             base = m.group(1)
             if base in fixes or not procedures:
                 tok = base
 
-        resolved = _resolve_fix(tok, fixes, ref_ll, dep, arr)
+        resolved = _resolve_fix(tok, fixes, ref_ll, dep, arr, airports)
         if resolved:
-            _append_name(names, resolved["name"])
+            _append_item(items, resolved["name"], "enroute", resolved["lat"], resolved["lon"])
             prev = resolved["name"]
             ref_ll = (resolved["lat"], resolved["lon"])
         elif re.match(r"^[A-Z]{2,6}$", tok):
-            _append_name(names, tok)
+            _append_item(items, tok, "enroute")
             prev = tok
 
     out = []
-    for n in names:
-        cands = fixes.get(n)
-        if cands:
-            ll = _nearest_candidate(cands, ref_ll)
-            out.append({"name": n, "lat": ll[0], "lon": ll[1]})
-        else:
-            out.append({"name": n})
+    for it in items:
+        n = it["name"]
+        if "lat" not in it and n in fixes:
+            ll = _nearest_candidate(fixes[n], ref_ll)
+            if ll:
+                it = dict(it)
+                it["lat"] = ll[0]
+                it["lon"] = ll[1]
+        out.append(it)
     return out

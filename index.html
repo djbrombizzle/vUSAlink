@@ -113,8 +113,11 @@
   .sectlabel{text-align:center;color:var(--cyan);border-top:1px solid #333;border-bottom:1px solid #333;padding:2px;background:#0e1a1a;letter-spacing:1px}
   .rtearea{padding:5px 8px;background:#060606;border-bottom:1px solid #222;white-space:normal;word-break:break-all}
   .rtearea .slash{color:var(--cyan)}
-  .fixlist{max-height:230px;overflow:auto}
+  .fixlist{max-height:280px;overflow:auto}
   .fixlist .fi{padding:3px 12px;cursor:pointer} .fixlist .fi:hover{background:#1c1c1c} .fixlist .fi.sel{background:var(--sel);color:#fff}
+  .fixseg .seglabel{color:var(--amber);font-size:11px;letter-spacing:1px;padding:2px 12px 1px;background:#141008;border-top:1px solid #332a18}
+  .fixseg:first-child .seglabel{border-top:none}
+  .fixseg .segfixes{padding-bottom:2px}
   .customfix{display:flex;gap:6px;padding:5px 8px;border-top:1px solid #333;align-items:center}
   .customfix input{background:#000;border:1px solid #555;color:var(--fg);padding:2px 6px;width:120px}
 
@@ -467,10 +470,11 @@ function displayList(){
 }
 
 //============================================================ route fixes
-function routeFixNames(a){
-  if(a&&a.routeFixes&&a.routeFixes.length)return a.routeFixes.map(f=>f.name);
-  return parseFixes((a&&(a._routeRaw||a.route))||'');
+function routeFixEntries(a){
+  if(a&&a.routeFixes&&a.routeFixes.length)return a.routeFixes;
+  return parseFixes((a&&(a._routeRaw||a.route))||'').map(name=>({name}));
 }
+function routeFixNames(a){return routeFixEntries(a).map(f=>f.name);}
 function parseFixes(route){
   // Offline/demo fallback only — hub routeFixes includes full SID/STAR expansion.
   const SKIP=new Set(['DCT','SID','STAR','DIRECT']);const out=[];
@@ -1117,16 +1121,35 @@ document.getElementById('spdUplink').onclick=async()=>{
 //============================================================ ROUTE menu
 const routemenu=document.getElementById('routemenu');
 let rtTarget=null,fixSelected=null,xresAltimManual=false;
+function appendFixRow(list,fix,onPick){
+  const fi=document.createElement('div');fi.className='fi';fi.textContent=fix;
+  fi.onclick=()=>{document.querySelectorAll('#fixList .fi').forEach(e=>e.classList.remove('sel'));fi.classList.add('sel');document.getElementById('customFix').value='';onPick(fix);};
+  list.appendChild(fi);
+}
 function openRouteMenu(idx,x,y){
   const a=displayList()[idx];rtTarget=a;fixSelected=null;
-  document.getElementById('rtTitle').textContent='ROUTE MENU '+a.cs;
+  const dep=(a.dep||'').toUpperCase(),arr=(a.arr||'').toUpperCase();
+  let title='ROUTE MENU '+a.cs;
+  if(dep||arr)title+='  '+[dep,arr].filter(Boolean).join(' \u2192 ');
+  document.getElementById('rtTitle').textContent=title;
   document.getElementById('rtCurrent').innerHTML='<span class="slash">/.</span>'+(a.route||'');
   const F=document.getElementById('fixList');F.innerHTML='';
-  routeFixNames(a).forEach(fix=>{
-    const fi=document.createElement('div');fi.className='fi';fi.textContent=fix;
-    fi.onclick=()=>{F.querySelectorAll('.fi').forEach(e=>e.classList.remove('sel'));fi.classList.add('sel');document.getElementById('customFix').value='';selectFix(fix);};
-    F.appendChild(fi);
-  });
+  const entries=routeFixEntries(a);
+  const hasKind=entries.some(f=>f.kind);
+  const pick=fix=>selectFix(fix);
+  if(hasKind){
+    [{label:'SID',kind:'sid'},{label:'ENROUTE',kind:'enroute'},{label:'STAR',kind:'star'}].forEach(g=>{
+      const seg=entries.filter(f=>f.kind===g.kind);
+      if(!seg.length)return;
+      const wrap=document.createElement('div');wrap.className='fixseg';
+      const lbl=document.createElement('div');lbl.className='seglabel';lbl.textContent=g.label;
+      wrap.appendChild(lbl);
+      const list=document.createElement('div');list.className='segfixes';
+      seg.forEach(f=>appendFixRow(list,f.name,pick));
+      wrap.appendChild(list);F.appendChild(wrap);
+    });
+    entries.filter(f=>f.kind&&f.kind!=='sid'&&f.kind!=='enroute'&&f.kind!=='star').forEach(f=>appendFixRow(F,f.name,pick));
+  }else entries.forEach(f=>appendFixRow(F,f.name,pick));
   document.getElementById('customFix').value='';
   document.getElementById('xresAlt').value='';document.getElementById('xresSpd').value='';
   document.getElementById('xresBox').classList.add('hidden');
