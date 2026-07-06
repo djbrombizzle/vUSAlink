@@ -151,7 +151,7 @@
   .mitem .dir{font-weight:700;font-size:11px}
   .mitem.in .dir{color:var(--cyan)} .mitem.out .dir{color:var(--amber)} .mitem.sys .dir{color:var(--green)} .mitem.err .dir{color:#e08a8a}
 
-  #scrim{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center}
+  #scrim,#helpScrim{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center}
   #settings{background:#0c0c0c;border:1px solid #666;width:430px;max-width:92vw}
   #settings h2{margin:0;padding:8px 12px;background:#161616;border-bottom:1px solid #444;font-size:14px;color:#fff;font-weight:normal}
   #settings .body{padding:12px} #settings .frow{margin-bottom:12px}
@@ -161,6 +161,17 @@
   #settings .discord-hint{margin:4px 0 0;padding:0 12px;font-size:11px;color:var(--fg-dim)}
   #settings .discord-hint a{color:var(--cyan)}
   #settings .actions{display:flex;justify-content:flex-end;gap:8px;padding:8px 12px 12px}
+  #helpPanel{background:#0c0c0c;border:1px solid #666;width:540px;max-width:92vw;max-height:85vh;display:flex;flex-direction:column}
+  #helpPanel h2{margin:0;padding:8px 12px;background:#161616;border-bottom:1px solid #444;font-size:14px;color:#fff;font-weight:normal}
+  #helpPanel .help-body{overflow:auto;padding:12px 16px 4px;flex:1}
+  #helpPanel h3{color:var(--cyan);font-size:13px;font-weight:normal;margin:18px 0 6px;letter-spacing:.3px}
+  #helpPanel h3:first-child{margin-top:0}
+  #helpPanel p{margin:0 0 8px;line-height:1.55}
+  #helpPanel ol,#helpPanel ul{margin:0 0 10px;padding-left:22px;line-height:1.55}
+  #helpPanel li{margin-bottom:5px}
+  #helpPanel .help-tip{color:var(--fg-dim);font-size:11px;margin-top:10px;line-height:1.45}
+  #helpPanel .help-tip a{color:var(--cyan)}
+  #helpPanel .actions{display:flex;justify-content:flex-end;gap:8px;padding:8px 12px 12px;border-top:1px solid #333}
   .footnote{color:var(--fg-dim);font-size:11px;padding:6px 8px}
 
 #verifyBar{background:#5a3a00;color:#ffd98a;border:1px solid #8a6320;border-left:4px solid #e0a13b;
@@ -187,6 +198,7 @@
   <div class="field"><label>ADD/FIND</label><input id="find" size="12" autocomplete="off" placeholder="callsign"></div>
   <button class="tb-btn" id="btnAdd">+ ADD A/C</button>
   <button class="tb-btn" id="btnRefresh">REFRESH</button>
+  <button class="tb-btn" id="btnHelp">HELP</button>
   <button class="tb-btn" id="btnSettings">SETTINGS</button>
   <button class="tb-btn" id="btnSound">SOUND</button>
   <a class="tb-btn" href="https://discord.gg/ZVSkeMZAqJ" target="_blank" rel="noopener noreferrer">DISCORD</a>
@@ -318,6 +330,52 @@
 <div id="logwrap">
   <div class="lh"><span class="title" id="logToggle">DATALINK LOG</span><span style="color:var(--fg-dim);cursor:pointer" id="clearLog">clear</span></div>
   <div id="log"></div>
+</div>
+
+<!-- help -->
+<div id="helpScrim" class="hidden">
+  <div id="helpPanel"><h2>vUSAlink Quick Help</h2>
+    <div class="help-body">
+      <h3>Just watching traffic?</h3>
+      <p>Type a US ARTCC in <b>VIEW ARTCC</b> (for example <b>KZJX</b>). The badge stays <b>VIEW ONLY</b> and the board is read-only — good for monitoring without sending CPDLC.</p>
+
+      <h3>Get started as a controller</h3>
+      <ol>
+        <li>Log on to VATSIM and open a US <b>center</b> position (for example <b>JAX_CTR</b> or <b>ZJX_CTR</b>).</li>
+        <li>Click <b>SETTINGS</b>, enter your <b>VATSIM CID</b>, and click <b>save</b>.</li>
+        <li>vUSAlink reads your live position from VATSIM. The status line should show your center when connected.</li>
+        <li>A yellow <b>VERIFY</b> bar appears with a code like <b>VUSA12345</b>. Paste that code into your VATSIM controller info or ATIS remark, then wait about 30 seconds.</li>
+        <li>Once verified, the badge changes to <b>CONTROLLING</b> and you can send CPDLC. This device stays verified for 30 days.</li>
+      </ol>
+
+      <h3>What the boxes mean</h3>
+      <ul>
+        <li><b>L</b> — CPDLC logon (solid white = connected). Click to force logoff; flashes when a pilot asks to log back on.</li>
+        <li><b>M</b> — Pilot message (flashes red on new traffic — click to read).</li>
+        <li><b>H</b> — Handoff pending (amber).</li>
+        <li><b>W</b> — Waiting for a pilot reply (WILCO/ROGER). Flashes red if no reply in 2 minutes.</li>
+      </ul>
+
+      <h3>Sending clearances</h3>
+      <p>Click a row on the board:</p>
+      <ul>
+        <li><b>FLIGHT ID</b> — hand off or contact another facility</li>
+        <li><b>ALT</b> — climb, descend, or maintain altitude</li>
+        <li><b>HDG/SPD</b> — heading or speed instructions</li>
+        <li><b>ROUTE</b> — direct-to a fix, crossing restrictions, or uplink a route</li>
+      </ul>
+      <p>Pilots with compatible avionics auto-logon in your sector unless you force-logged them off.</p>
+
+      <h3>Useful tips</h3>
+      <ul>
+        <li><b>SHOW ALL A/C</b> — show every aircraft in the sector, not only those tuned to your frequency.</li>
+        <li><b>SOUND</b> — adjust alert volume (50% is normal).</li>
+        <li><b>REFRESH</b> — reload live VATSIM traffic.</li>
+      </ul>
+      <p class="help-tip">Still stuck? <a href="https://discord.gg/ZVSkeMZAqJ" target="_blank" rel="noopener noreferrer">Join our Discord</a> or open <b>SETTINGS</b> to check your CID.</p>
+    </div>
+    <div class="actions"><button class="tb-btn" id="helpClose">close</button></div>
+  </div>
 </div>
 
 <!-- settings -->
@@ -1377,6 +1435,14 @@ function esc(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':
 document.getElementById('clearLog').onclick=()=>log.innerHTML='';
 function setHoppie(ok,t){document.getElementById('connDot').className='dot '+(ok?'on':'err');document.getElementById('statusText').textContent=t||'';}
 function setVat(s,t){document.getElementById('vatDot').className='dot '+(s==='on'?'on':s==='busy'?'busy':s==='err'?'err':'');document.getElementById('vatText').textContent=t||'';}
+
+//============================================================ help
+const helpScrim=document.getElementById('helpScrim');
+function openHelp(){helpScrim.classList.remove('hidden');}
+function closeHelp(){helpScrim.classList.add('hidden');}
+document.getElementById('btnHelp').onclick=openHelp;
+document.getElementById('helpClose').onclick=closeHelp;
+helpScrim.onclick=e=>{if(e.target===helpScrim)closeHelp();};
 
 //============================================================ settings
 const scrim=document.getElementById('scrim');
