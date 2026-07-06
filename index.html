@@ -854,9 +854,13 @@ function updateMode(){
   else if(hubMode()){badge.textContent='VERIFY TO CONTROL';badge.className='badge view';if(field)field.style.display='none';}
   else{badge.textContent='VIEW ONLY';badge.className='badge view';if(field)field.style.display='';}
 }
+function updateTabTitle(){
+  const n=connected.size;
+  document.title=n?`(${n})vUSAlink`:'vUSAlink';
+}
 function renderBoard(){
   checkWilcoTimeouts();
-  updateMode();updatePositionBar();
+  updateMode();updatePositionBar();updateTabTitle();
   const list=displayList();
   const onListConnected=new Set(list.filter(a=>connected.has(a.cs)).map(a=>a.cs));
   if(pollPrimed&&!suppressSounds&&!isMuted()){
