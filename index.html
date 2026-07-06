@@ -197,15 +197,15 @@
 .map-leg .swatch{width:14px;height:10px;border:1px solid #555;display:inline-block}
 .map-leg .swatch.staffed{background:rgba(121,210,122,.35);border-color:var(--green)}
 .map-leg .dot-swatch{width:8px;height:8px;border-radius:50%;display:inline-block}
-.map-leg .dot-swatch.on{background:var(--green)}
-.map-leg .dot-swatch.off{background:#666}
+.map-leg .dot-swatch.on{background:#9ef09f}
+.map-leg .dot-swatch.off{background:#666;opacity:.5}
 #mapWrap{flex:1;min-height:0;background:#050505;padding:4px}
 #mapSvg{width:100%;height:100%;display:block}
 .map-artcc{fill:#0d0d0d;stroke:#333;stroke-width:0.9;vector-effect:non-scaling-stroke}
 .map-artcc-staffed{fill:rgba(121,210,122,.2);stroke:var(--green);stroke-width:1.5}
 .map-artcc-mine{stroke:var(--cyan);stroke-width:1.6}
-.map-ac{fill:#777;stroke:#999;stroke-width:0.6}
-.map-ac-conn{fill:var(--green);stroke:#a8e6a9;stroke-width:0.9}
+.map-ac{fill:#777;stroke:#999;stroke-width:0.5;opacity:.5}
+.map-ac-conn{fill:#9ef09f;stroke:#d4ffd5;stroke-width:0.7}
 
 /* rows */
 
@@ -971,7 +971,7 @@ function renderMapSvg(bnd,data,statsEl){
     const xy=mapProj(f.lon,f.lat);
     const cls=f.connected?'map-ac-conn':'map-ac';
     const tip=`${f.callsign} FL${f.fl||'?'}${f.connected?' \u00b7 KUSA':''}${f.artcc?' \u00b7 '+f.artcc:''}`;
-    html+=`<circle class="${cls}" cx="${xy[0].toFixed(1)}" cy="${xy[1].toFixed(1)}" r="3.5"><title>${esc(tip)}</title></circle>`;
+    html+=`<circle class="${cls}" cx="${xy[0].toFixed(1)}" cy="${xy[1].toFixed(1)}" r="2.5"><title>${esc(tip)}</title></circle>`;
   });
   svg.innerHTML=html;
 }
