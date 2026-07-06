@@ -938,7 +938,42 @@ async function loadMapBoundaries(){
 async function fetchMapData(){
   const res=await fetch(hubBase()+'/hub/map',{method:'POST',
     headers:{'Content-Type':'application/json'},body:'{}'});
-  return res.json();
+  let data;
+  try{data=await res.json();}catch(e){throw new Error('hub map response invalid');}
+  if(!res.ok)throw new Error((data&&data.error)||('hub map HTTP '+res.status));
+  return data;
+}
+function renderMapSvg(bnd,data,statsEl){
+  const svg=document.getElementById('mapSvg');
+  if(!svg)return;
+  const staffed=new Set((data&&data.staffed)||[]);
+  const flights=(data&&data.flights)||[];
+  const onKusa=flights.filter(f=>f.connected).length;
+  const myArtcc=(hubMode()?hubArtcc:monitorArtcc()||'').toUpperCase();
+  const ctrlByArtcc={};
+  ((data&&data.controllers)||[]).forEach(c=>{if(c.artcc&&c.callsign)ctrlByArtcc[c.artcc]=c.callsign;});
+  if(statsEl){
+    const hubNote=data?'':' \u00b7 traffic unavailable';
+    statsEl.textContent=`${flights.length} a/c \u00b7 ${onKusa} on KUSA \u00b7 ${staffed.size} CPDLC center${staffed.size===1?'':'s'}${hubNote}`;
+  }
+  let html='';
+  Object.keys(bnd).sort().forEach(id=>{
+    let cls='map-artcc';
+    if(staffed.has(id))cls+=' map-artcc-staffed';
+    if(myArtcc&&id===myArtcc)cls+=' map-artcc-mine';
+    const tip=id+(staffed.has(id)?(' \u00b7 CPDLC: '+(ctrlByArtcc[id]||'active')):'');
+    mapGeomPaths(bnd[id]).forEach(d=>{
+      if(d)html+=`<path class="${cls}" data-artcc="${id}" d="${d}"><title>${esc(tip)}</title></path>`;
+    });
+  });
+  flights.forEach(f=>{
+    if(f.lat==null||f.lon==null)return;
+    const xy=mapProj(f.lon,f.lat);
+    const cls=f.connected?'map-ac-conn':'map-ac';
+    const tip=`${f.callsign} FL${f.fl||'?'}${f.connected?' \u00b7 KUSA':''}${f.artcc?' \u00b7 '+f.artcc:''}`;
+    html+=`<circle class="${cls}" cx="${xy[0].toFixed(1)}" cy="${xy[1].toFixed(1)}" r="3.5"><title>${esc(tip)}</title></circle>`;
+  });
+  svg.innerHTML=html;
 }
 async function renderLiveMap(){
   const statsEl=document.getElementById('mapStats');
@@ -947,34 +982,19 @@ async function renderLiveMap(){
   mapLoading=true;
   if(statsEl)statsEl.textContent='loading\u2026';
   try{
-    const [bnd,data]=await Promise.all([loadMapBoundaries(),fetchMapData()]);
-    if(!data||!data.ok){if(statsEl)statsEl.textContent=data&&data.error?data.error:'map unavailable';return;}
-    const staffed=new Set(data.staffed||[]);
-    const flights=data.flights||[];
-    const onKusa=flights.filter(f=>f.connected).length;
-    const myArtcc=(hubMode()?hubArtcc:monitorArtcc()||'').toUpperCase();
-    const ctrlByArtcc={};
-    (data.controllers||[]).forEach(c=>{if(c.artcc&&c.callsign)ctrlByArtcc[c.artcc]=c.callsign;});
-    if(statsEl)statsEl.textContent=`${flights.length} a/c \u00b7 ${onKusa} on KUSA \u00b7 ${staffed.size} CPDLC center${staffed.size===1?'':'s'}`;
-    let html='';
-    Object.keys(bnd).sort().forEach(id=>{
-      let cls='map-artcc';
-      if(staffed.has(id))cls+=' map-artcc-staffed';
-      if(myArtcc&&id===myArtcc)cls+=' map-artcc-mine';
-      const tip=id+(staffed.has(id)?(' \u00b7 CPDLC: '+(ctrlByArtcc[id]||'active')):'');
-      mapGeomPaths(bnd[id]).forEach(d=>{
-        if(d)html+=`<path class="${cls}" data-artcc="${id}" d="${d}"><title>${esc(tip)}</title></path>`;
-      });
-    });
-    flights.forEach(f=>{
-      if(f.lat==null||f.lon==null)return;
-      const xy=mapProj(f.lon,f.lat);
-      const cls=f.connected?'map-ac-conn':'map-ac';
-      const tip=`${f.callsign} FL${f.fl||'?'}${f.connected?' \u00b7 KUSA':''}${f.artcc?' \u00b7 '+f.artcc:''}`;
-      html+=`<circle class="${cls}" cx="${xy[0].toFixed(1)}" cy="${xy[1].toFixed(1)}" r="3.5"><title>${esc(tip)}</title></circle>`;
-    });
-    svg.innerHTML=html;
-  }catch(e){if(statsEl)statsEl.textContent='map load failed';}
+    let bnd,data,hubErr='';
+    try{bnd=await loadMapBoundaries();}
+    catch(e){if(statsEl)statsEl.textContent='boundaries load failed';return;}
+    try{data=await fetchMapData();}
+    catch(e){hubErr=e.message||'hub map unavailable';}
+    if(!data||!data.ok){
+      hubErr=(data&&data.error)||hubErr||'hub map unavailable';
+      renderMapSvg(bnd,null,statsEl);
+      if(statsEl)statsEl.textContent=hubErr+' \u00b7 boundaries only';
+      return;
+    }
+    renderMapSvg(bnd,data,statsEl);
+  }catch(e){if(statsEl)statsEl.textContent=(e&&e.message)||'map load failed';}
   finally{mapLoading=false;}
 }
 function openLiveMap(){
