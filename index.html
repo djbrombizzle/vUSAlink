@@ -1073,6 +1073,7 @@ function updateTabTitle(){
 function renderBoard(){
   checkWilcoTimeouts();
   updateMode();updatePositionBar();updateTabTitle();
+  annotateFlights();
   const list=displayList();
   const onListConnected=new Set(list.filter(a=>connected.has(a.cs)).map(a=>a.cs));
   if(pollPrimed&&!suppressSounds&&!isMuted()){
@@ -1086,7 +1087,8 @@ function renderBoard(){
   rows.innerHTML='';
   list.forEach((a,idx)=>{
     const tr=document.createElement('tr');
-    if(a.cat==='ADJ')tr.classList.add('adj');
+    // ADJ = approaching from a neighbor sector; dim unless tuned to our frequency.
+    if(a.cat==='ADJ'&&(myPosition.freqMhz==null||!a.onFreq))tr.classList.add('adj');
     tr.innerHTML=renderRowClassic(a,idx);
     rows.appendChild(tr);
   });
