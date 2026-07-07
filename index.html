@@ -145,6 +145,13 @@
   #logwrap .lh{display:flex;justify-content:space-between;padding:3px 8px;background:#161616;border-bottom:1px solid #333}
   #logwrap .lh .title{color:var(--amber);cursor:pointer;user-select:none}
   #log{overflow:auto;padding:4px 8px}
+  #queuewrap{position:fixed;left:0;bottom:0;width:430px;max-height:42vh;background:var(--panel);border-right:1px solid var(--line);border-top:1px solid var(--line);display:flex;flex-direction:column;z-index:40}
+  #queuewrap .lh{display:flex;align-items:center;gap:8px;padding:3px 8px;background:#161616;border-bottom:1px solid #333;flex-wrap:wrap}
+  #queuewrap .lh .title{color:var(--amber);cursor:pointer;user-select:none;flex:1;min-width:120px}
+  #queuewrap .lh .chip.uplink{font-size:12px;padding:1px 10px}
+  #queueList{overflow:auto;padding:4px 8px;flex:1;min-height:0}
+  .qitem{border-bottom:1px solid #181818;padding:3px 0;white-space:normal;word-break:break-word}
+  .qitem .meta{color:var(--fg-dim);font-size:11px}
   .msg{border-bottom:1px solid #181818;padding:3px 0;white-space:normal;word-break:break-word}
   .msg .meta{color:var(--fg-dim);font-size:11px}
   .msg.in .dir{color:var(--cyan)} .msg.out .dir{color:var(--amber)} .msg.sys .dir{color:var(--green)} .msg.err{color:#e08a8a}
@@ -271,7 +278,7 @@
 <div id="altmenu" class="pop hidden">
   <div class="hdr"><span class="title">Altitude Information</span><span class="x" data-close="altmenu">X</span></div>
   <div class="acline" id="altAc">CALLSIGN TYPE</div>
-  <div class="row"><span class="chip amend">Amend</span><span class="chip">Scratchpad</span>
+  <div class="row"><span class="chip amend" id="altAmend" title="Remove last queued item">Amend</span><span class="chip" id="altScratchpad" title="Add to uplink queue">Scratchpad</span>
     <span class="chip uplink hidden" id="altUplink">UPLINK</span></div>
   <div class="row"><span style="color:var(--fg-dim)">Altitude</span>
     <input id="altInput" autocomplete="off" inputmode="numeric" style="width:96px" placeholder="FL / feet"></div>
@@ -285,7 +292,7 @@
 <div id="hdgmenu" class="pop hidden">
   <div class="hdr"><span class="title">Heading Information</span><span class="x" data-close="hdgmenu">X</span></div>
   <div class="acline" id="hdgAc">CALLSIGN TYPE</div>
-  <div class="row"><span class="chip amend">Amend</span><span class="chip">Scratchpad</span>
+  <div class="row"><span class="chip amend" id="hdgAmend" title="Remove last queued item">Amend</span><span class="chip" id="hdgScratchpad" title="Add to uplink queue">Scratchpad</span>
     <span class="chip uplink hidden" id="hdgUplink">UPLINK</span></div>
   <div class="row"><span style="color:var(--fg-dim)">Heading</span>
     <input id="hdgInput" autocomplete="off" inputmode="numeric" style="width:62px"></div>
@@ -298,7 +305,7 @@
   <div class="hdr"><span class="title">Speed Information</span><span class="x" data-close="spdmenu">X</span></div>
   <div class="acline" id="spdAc">CALLSIGN TYPE</div>
   <div class="row"><span class="chip cyan" id="spdRns" title="Resume normal speed">RNS</span></div>
-  <div class="row"><span class="chip amend">Amend</span><span class="chip">Scratchpad</span>
+  <div class="row"><span class="chip amend" id="spdAmend" title="Remove last queued item">Amend</span><span class="chip" id="spdScratchpad" title="Add to uplink queue">Scratchpad</span>
     <span class="chip uplink hidden" id="spdUplink">UPLINK</span></div>
   <div class="row"><span style="color:var(--fg-dim)">Speed:</span>
     <input id="spdInput" autocomplete="off" inputmode="numeric" style="width:62px"></div>
@@ -311,7 +318,8 @@
 <!-- ROUTE menu -->
 <div id="routemenu" class="pop hidden">
   <div class="hdr"><span class="title" id="rtTitle">ROUTE MENU</span><span class="x" data-close="routemenu">X</span></div>
-  <div class="bar"><span class="chip amend">AMEND</span>
+  <div class="bar"><span class="chip amend" id="rtAmend" title="Remove last queued item">AMEND</span>
+    <span class="chip" id="rtScratchpad" title="Add to uplink queue">SCRATCHPAD</span>
     <span class="chip uplink" id="rtUplink">DIRECT</span></div>
   <div class="sectlabel">CURRENT RTE</div><div class="rtearea" id="rtCurrent"></div>
   <div class="sectlabel">CLICK A FIX &mdash; then DIRECT (top) or set a crossing below</div><div class="fixlist" id="fixList"></div>
@@ -346,6 +354,16 @@
 <div id="volpop" class="pop hidden">
   <div class="hdr"><span class="title">SOUND VOLUME</span><span class="x" data-close="volpop">X</span></div>
   <div class="volbody"><input type="range" id="volRange" min="0" max="100" step="5" value="100"><span id="volPct">100%</span></div>
+</div>
+
+<!-- uplink queue -->
+<div id="queuewrap" class="hidden">
+  <div class="lh">
+    <span class="title" id="queueToggle">UPLINK QUEUE</span>
+    <span class="chip uplink" id="queueUplink">UPLINK</span>
+    <span style="color:var(--fg-dim);cursor:pointer" id="clearQueue">clear</span>
+  </div>
+  <div id="queueList"></div>
 </div>
 
 <!-- message log -->
@@ -406,6 +424,16 @@
       </ul>
       <p>Pilots with compatible avionics auto-logon in your sector unless you force-logged them off.</p>
 
+      <h3>Multi-message uplinks</h3>
+      <p>Stage several clearances for one aircraft, then send them in a single CPDLC message:</p>
+      <ol>
+        <li>Open <b>ALT</b>, <b>HDG/SPD</b>, or <b>ROUTE</b> and set your instruction.</li>
+        <li>Click <b>Scratchpad</b> to add it to the queue (bottom-left panel) instead of sending.</li>
+        <li>Repeat for other instructions (up to 5 elements).</li>
+        <li>Click <b>UPLINK</b> in the <b>UPLINK QUEUE</b> panel to send all staged items at once.</li>
+      </ol>
+      <p>To send just one clearance immediately, use <b>UPLINK</b> in the menu as before. <b>Amend</b> removes the last queued item for that aircraft.</p>
+
       <h3>Useful tips</h3>
       <ul>
         <li><b>SHOW ALL A/C</b> — show every aircraft in the sector, not only those tuned to your frequency.</li>
@@ -458,7 +486,7 @@ const DEFAULT_HUB_URL='https://web-production-3d9fe.up.railway.app';   // shared
 // VATSIM CID. The hub URL is built in, so Settings only asks for the CID. (Solo/direct-Hoppie
 // is retired — a browser can't reach Hoppie directly, which is why the hub exists.)
 const WEB_ONLY=true;
-let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',volume:1,logCollapsed:true,viewArtcc:'',showAll:false});
+let settings=LS.get('vedst_settings',{logon:'',station:'',airspace:'',hubUrl:'',hubToken:'',cid:'',volume:1,logCollapsed:true,queueCollapsed:true,viewArtcc:'',showAll:false});
 if(typeof settings.volume!=='number')settings.volume=(settings.muted===true?0:1);   // migrate old SOUND OFF -> volume 0
 function isMuted(){return !(settings.volume>0);}                 // volume 0 (or unset) = muted
 // settings.volume is the gain multiplier: 1.0 = current sound levels (shown as 50%),
@@ -651,6 +679,94 @@ async function sendCpdlc(to,ra,message,mrn){
   burstUntil=Date.now()+90000;
   if(wilcoExpectsReply(ra))trackWilcoAwait((to||'').toUpperCase(),finalMin);
   return finalMin;
+}
+
+//============================================================ uplink queue (multi-element CPDLC)
+const UPLINK_QUEUE_MAX=5;
+const uplinkQueue={};                    // callsign -> [{label, msg, effects}]
+let queueActiveCs='';
+
+function applyUplinkEffects(cs,min,effects){
+  if(!effects||min==null)return;
+  if(effects.type==='alt'){
+    if(effects.alt!=null){assigned[cs]=effects.alt;persist();}
+    altMin[cs]=min;altPending.add(cs);
+  }else if(effects.type==='route'){
+    rtMin[cs]=min;routePending.add(cs);
+  }
+}
+async function sendUplinkEntry(cs,entry){
+  if(!entry||!entry.msg)return null;
+  const min=await sendCpdlc(cs,'WU',entry.msg);
+  if(min!=null)applyUplinkEffects(cs,min,entry.effects);
+  return min;
+}
+function queueTotalCount(){
+  return Object.values(uplinkQueue).reduce((n,a)=>n+a.length,0);
+}
+function queueAdd(cs,entry){
+  cs=(cs||'').toUpperCase();if(!cs||!entry||!entry.msg)return false;
+  const list=uplinkQueue[cs]||(uplinkQueue[cs]=[]);
+  if(list.length>=UPLINK_QUEUE_MAX){
+    logMsg('err',cs,`uplink queue full (${UPLINK_QUEUE_MAX} elements max)`);return false;
+  }
+  list.push(entry);queueActiveCs=cs;renderQueuePanel();
+  return true;
+}
+function queuePopLast(cs){
+  cs=(cs||'').toUpperCase();
+  const list=uplinkQueue[cs];if(!list||!list.length)return;
+  list.pop();if(!list.length)delete uplinkQueue[cs];
+  if(queueActiveCs===cs&&!uplinkQueue[cs])queueActiveCs=Object.keys(uplinkQueue)[0]||'';
+  renderQueuePanel();
+}
+function queueClear(cs){
+  if(cs){delete uplinkQueue[(cs||'').toUpperCase()];}
+  else{Object.keys(uplinkQueue).forEach(k=>delete uplinkQueue[k]);}
+  queueActiveCs=Object.keys(uplinkQueue)[0]||'';
+  renderQueuePanel();
+}
+function renderQueuePanel(){
+  const wrap=document.getElementById('queuewrap');
+  const listEl=document.getElementById('queueList');
+  const toggle=document.getElementById('queueToggle');
+  if(!wrap||!listEl)return;
+  const total=queueTotalCount();
+  if(!total){wrap.classList.add('hidden');return;}
+  wrap.classList.remove('hidden');
+  if(!queueActiveCs||!uplinkQueue[queueActiveCs]){
+    queueActiveCs=Object.keys(uplinkQueue)[0]||'';
+  }
+  const items=uplinkQueue[queueActiveCs]||[];
+  const n=items.length;
+  toggle.textContent=(settings.queueCollapsed?'\u25b8':'\u25be')+` UPLINK QUEUE${queueActiveCs?' \u2014 '+queueActiveCs:''}${n?' ('+n+')':''}`;
+  listEl.style.display=settings.queueCollapsed?'none':'';
+  listEl.innerHTML='';
+  if(!n){
+    listEl.innerHTML='<div class="qitem"><span class="meta">No staged uplinks.</span></div>';
+    return;
+  }
+  items.forEach((it,i)=>{
+    const div=document.createElement('div');div.className='qitem';
+    div.innerHTML=`<span class="meta">${i+1}. ${esc(it.label||'MSG')}</span> ${esc(it.msg)}`;
+    listEl.appendChild(div);
+  });
+}
+async function sendQueuedUplink(cs){
+  cs=(cs||queueActiveCs||'').toUpperCase();
+  const items=uplinkQueue[cs]||[];
+  if(!items.length)return;
+  const combined=items.map(i=>i.msg).join(' @_@ ');
+  const min=await sendCpdlc(cs,'WU',combined);
+  if(min!=null){
+    items.forEach(i=>applyUplinkEffects(cs,min,i.effects));
+    delete uplinkQueue[cs];
+    if(queueActiveCs===cs)queueActiveCs=Object.keys(uplinkQueue)[0]||'';
+    renderQueuePanel();renderBoard();
+  }
+}
+function applyQueueCollapsed(){
+  renderQueuePanel();
 }
 async function pollOnce(){
   if(!configured()&&!hubMode())return;
@@ -1157,6 +1273,55 @@ function parseAlt(v){
   if(n>=1000)n=Math.round(n/100);     // entered in feet -> flight level
   return (n<10||n>600)?null:n;
 }
+async function buildAltMessage(target,tgt,altimVal){
+  if(!target||tgt==null)return null;
+  const cur=target.alt||0;
+  let msg;
+  if(isBelowFl180(tgt)){
+    const verb=tgt>cur?'CLIMB AND MAINTAIN':tgt<cur?'DESCEND AND MAINTAIN':'MAINTAIN';
+    const dest=normalizeIcao(target.arr);
+    const altim=altimVal!=null?altimVal:(await fetchDestAltimeter(dest));
+    msg=`${verb} ${formatFeetAlt(tgt)}${altimeterSuffix(dest,altim)}`;
+  }else{
+    const verb=tgt>cur?'CLIMB TO AND MAINTAIN':tgt<cur?'DESCEND TO AND MAINTAIN':'MAINTAIN';
+    msg=`${verb} @${flStr(tgt)}@`;
+  }
+  return {label:'ALT',msg,effects:{type:'alt',alt:tgt}};
+}
+function buildHdgMessage(cmd){
+  if(!cmd)return null;
+  return {label:'HDG',msg:cmd,effects:null};
+}
+function buildSpdMessage(cmd){
+  if(!cmd)return null;
+  return {label:'SPD',msg:cmd,effects:null};
+}
+function buildRouteDirectMessage(fix){
+  if(!fix)return null;
+  return {label:'DIRECT',msg:`PROCEED DIRECT TO @${fix}@`,effects:{type:'route'}};
+}
+async function buildCrossingMessage(target,fix,alt,spd,altimVal){
+  if(!target||!fix)return null;
+  const altP=alt?parseAltitudeInput(alt):null;
+  const A=alt?(altP&&altP.below180?crossAltText(alt):normLevel(alt)):'';
+  const S=spd?normSpeed(spd):'';
+  if(!A&&!S)return null;
+  let msg=(A&&S)?`CROSS @${fix}@ AT @${A}@ AT @${S}@`
+           :A?`CROSS @${fix}@ AT @${A}@`
+           :`CROSS @${fix}@ AT @${S}@`;
+  if(altP&&altP.below180){
+    const dest=normalizeIcao(target.arr);
+    const altim=altimVal!=null?altimVal:(await fetchDestAltimeter(dest));
+    msg+=altimeterSuffix(dest,altim);
+  }
+  return {label:'CROSS',msg,effects:{type:'route'}};
+}
+function buildRouteUplinkMessage(target,route){
+  if(!target||!route)return null;
+  const dest=(target.arr||'').toUpperCase();
+  const msg=dest?`CLEARED TO @${dest}@ VIA @${route}@`:`CLEARED ROUTE @${route}@`;
+  return {label:'ROUTE',msg,effects:{type:'route'}};
+}
 function openAltMenu(idx,x,y){
   const a=displayList()[idx];altTarget=a;altSelected=null;altAltimManual=false;
   document.getElementById('altAc').textContent=`${a.cs}  ${a.type||''}`;
@@ -1209,22 +1374,21 @@ document.getElementById('altInput').addEventListener('input',()=>{
 });
 document.getElementById('altUplink').onclick=async()=>{
   if(!altTarget||altSelected==null)return;
-  const cs=altTarget.cs,cur=altTarget.alt||0,tgt=altSelected;
-  let msg;
-  if(isBelowFl180(tgt)){
-    const verb=tgt>cur?'CLIMB AND MAINTAIN':tgt<cur?'DESCEND AND MAINTAIN':'MAINTAIN';
-    const dest=normalizeIcao(altTarget.arr);
-    const altim=document.getElementById('altAltimInput').value.trim()||await fetchDestAltimeter(dest);
-    msg=`${verb} ${formatFeetAlt(tgt)}${altimeterSuffix(dest,altim)}`;
-  }else{
-    const verb=tgt>cur?'CLIMB TO AND MAINTAIN':tgt<cur?'DESCEND TO AND MAINTAIN':'MAINTAIN';
-    msg=`${verb} @${flStr(tgt)}@`;
-  }
+  const cs=altTarget.cs;
+  const altim=document.getElementById('altAltimInput').value.trim();
+  const entry=await buildAltMessage(altTarget,altSelected,altim||null);
+  if(!entry)return;
   close('altmenu');
-  const min=await sendCpdlc(cs,'WU',msg);
-  if(min!=null){assigned[cs]=tgt;altMin[cs]=min;altPending.add(cs);persist();}
-  renderBoard();
+  await sendUplinkEntry(cs,entry);renderBoard();
 };
+document.getElementById('altScratchpad').onclick=async()=>{
+  if(!altTarget||altSelected==null)return;
+  const altim=document.getElementById('altAltimInput').value.trim();
+  const entry=await buildAltMessage(altTarget,altSelected,altim||null);
+  if(!entry||!queueAdd(altTarget.cs,entry))return;
+  close('altmenu');
+};
+document.getElementById('altAmend').onclick=()=>{if(altTarget)queuePopLast(altTarget.cs);};
 
 //============================================================ HEADING menu
 const hdgmenu=document.getElementById('hdgmenu');
@@ -1275,9 +1439,18 @@ document.getElementById('hdgInput').addEventListener('input',()=>{
 });
 document.getElementById('hdgUplink').onclick=async()=>{
   if(!hdgTarget||!hdgCmd)return;
-  const cs=hdgTarget.cs;close('hdgmenu');
-  await sendCpdlc(cs,'WU',hdgCmd);
+  const cs=hdgTarget.cs;const entry=buildHdgMessage(hdgCmd);
+  if(!entry)return;
+  close('hdgmenu');
+  await sendUplinkEntry(cs,entry);renderBoard();
 };
+document.getElementById('hdgScratchpad').onclick=()=>{
+  if(!hdgTarget||!hdgCmd)return;
+  const entry=buildHdgMessage(hdgCmd);
+  if(!entry||!queueAdd(hdgTarget.cs,entry))return;
+  close('hdgmenu');
+};
+document.getElementById('hdgAmend').onclick=()=>{if(hdgTarget)queuePopLast(hdgTarget.cs);};
 
 //============================================================ SPEED menu
 const spdmenu=document.getElementById('spdmenu');
@@ -1337,9 +1510,18 @@ document.getElementById('spdInput').addEventListener('input',()=>{
 });
 document.getElementById('spdUplink').onclick=async()=>{
   if(!spdTarget||!spdCmd)return;
-  const cs=spdTarget.cs;close('spdmenu');
-  await sendCpdlc(cs,'WU',spdCmd);
+  const cs=spdTarget.cs;const entry=buildSpdMessage(spdCmd);
+  if(!entry)return;
+  close('spdmenu');
+  await sendUplinkEntry(cs,entry);renderBoard();
 };
+document.getElementById('spdScratchpad').onclick=()=>{
+  if(!spdTarget||!spdCmd)return;
+  const entry=buildSpdMessage(spdCmd);
+  if(!entry||!queueAdd(spdTarget.cs,entry))return;
+  close('spdmenu');
+};
+document.getElementById('spdAmend').onclick=()=>{if(spdTarget)queuePopLast(spdTarget.cs);};
 
 //============================================================ ROUTE menu
 const routemenu=document.getElementById('routemenu');
@@ -1424,37 +1606,49 @@ document.getElementById('xresUplink').onclick=async()=>{
   const alt=document.getElementById('xresAlt').value.trim();
   const spd=document.getElementById('xresSpd').value.trim();
   if(!alt&&!spd)return;
-  const altP=alt?parseAltitudeInput(alt):null;
-  const A=alt?(altP&&altP.below180?crossAltText(alt):normLevel(alt)):'';
-  const S=spd?normSpeed(spd):'';
-  let msg=(A&&S)?`CROSS @${fixSelected}@ AT @${A}@ AT @${S}@`
-           :A?`CROSS @${fixSelected}@ AT @${A}@`
-           :`CROSS @${fixSelected}@ AT @${S}@`;
-  if(altP&&altP.below180){
-    const dest=normalizeIcao(rtTarget.arr);
-    const altim=document.getElementById('xresAltimInput').value.trim()||await fetchDestAltimeter(dest);
-    msg+=altimeterSuffix(dest,altim);
-  }
+  const altim=document.getElementById('xresAltimInput').value.trim();
+  const entry=await buildCrossingMessage(rtTarget,fixSelected,alt,spd,altim||null);
+  if(!entry)return;
   const cs=rtTarget.cs;close('routemenu');
-  const min=await sendCpdlc(cs,'WU',msg);
-  if(min!=null){rtMin[cs]=min;routePending.add(cs);renderBoard();}
+  await sendUplinkEntry(cs,entry);renderBoard();
 };
 document.getElementById('rtUplink').onclick=async()=>{
   const v=document.getElementById('customFix').value.trim().toUpperCase();const fix=v||fixSelected;
   if(!rtTarget||!fix)return;
+  const entry=buildRouteDirectMessage(fix);
+  if(!entry)return;
   const cs=rtTarget.cs;close('routemenu');
-  const min=await sendCpdlc(cs,'WU',`PROCEED DIRECT TO @${fix}@`);
-  if(min!=null){rtMin[cs]=min;routePending.add(cs);renderBoard();}
+  await sendUplinkEntry(cs,entry);renderBoard();
 };
 document.getElementById('rtSendRoute').onclick=async()=>{
   if(!rtTarget)return;
   const rt=document.getElementById('rtEdit').value.trim().toUpperCase().replace(/\s+/g,' ');
   if(!rt)return;
-  const cs=rtTarget.cs;const dest=(rtTarget.arr||'').toUpperCase();close('routemenu');
-  const msg=dest?`CLEARED TO @${dest}@ VIA @${rt}@`:`CLEARED ROUTE @${rt}@`;
-  const min=await sendCpdlc(cs,'WU',msg);
-  if(min!=null){rtMin[cs]=min;routePending.add(cs);renderBoard();}
+  const entry=buildRouteUplinkMessage(rtTarget,rt);
+  if(!entry)return;
+  const cs=rtTarget.cs;close('routemenu');
+  await sendUplinkEntry(cs,entry);renderBoard();
 };
+document.getElementById('rtScratchpad').onclick=async()=>{
+  if(!rtTarget)return;
+  const alt=document.getElementById('xresAlt').value.trim();
+  const spd=document.getElementById('xresSpd').value.trim();
+  const v=document.getElementById('customFix').value.trim().toUpperCase();
+  const fix=v||fixSelected;
+  let entry=null;
+  if(fix&&(alt||spd)){
+    const altim=document.getElementById('xresAltimInput').value.trim();
+    entry=await buildCrossingMessage(rtTarget,fix,alt,spd,altim||null);
+  }else if(fix){
+    entry=buildRouteDirectMessage(fix);
+  }else{
+    const rt=document.getElementById('rtEdit').value.trim().toUpperCase().replace(/\s+/g,' ');
+    if(rt)entry=buildRouteUplinkMessage(rtTarget,rt);
+  }
+  if(!entry||!queueAdd(rtTarget.cs,entry))return;
+  close('routemenu');
+};
+document.getElementById('rtAmend').onclick=()=>{if(rtTarget)queuePopLast(rtTarget.cs);};
 
 //============================================================ HANDOFF menu (FLIGHT ID)
 const handoffpop=document.getElementById('handoffpop');
@@ -1764,7 +1958,14 @@ document.getElementById('logToggle').onclick=()=>{settings.logCollapsed=!setting
 if(!settings.logCollapseInit){settings.logCollapsed=true;settings.logCollapseInit=true;persist();}  // start collapsed once; never auto-opens on messages
 applyLogCollapsed();
 
-
+//============================================================ collapsible uplink queue
+document.getElementById('queueToggle').onclick=()=>{
+  settings.queueCollapsed=!settings.queueCollapsed;persist();applyQueueCollapsed();
+};
+document.getElementById('queueUplink').onclick=()=>sendQueuedUplink(queueActiveCs);
+document.getElementById('clearQueue').onclick=()=>queueClear(queueActiveCs);
+if(settings.queueCollapsed==null){settings.queueCollapsed=true;persist();}
+applyQueueCollapsed();
 
 //============================================================ draggable popups
 function makeDraggable(el,handle){
