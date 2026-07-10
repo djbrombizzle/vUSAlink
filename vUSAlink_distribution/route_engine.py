@@ -3,7 +3,7 @@
 import math
 import re
 
-_AWY_RE = re.compile(r"^[JQV]\d+[A-Z]?$", re.I)
+_AWY_RE = re.compile(r"^[A-Z]\d+[A-Z]?$", re.I)
 _COORD_RE = re.compile(r"^\d{2,4}[NS]\d{3,5}[EW]$")
 
 _navdata = {"fixes": {}, "airways": {}, "procedures": {}, "airports": {}, "loaded": False}
