@@ -8,7 +8,9 @@ nothing to install. It runs **hub-only**: every CPDLC clearance goes through the
 `index.html` is the entire app (HTML + CSS + JavaScript in one file). It talks directly
 to the hub over HTTPS.
 
-Live link here https://djbrombizzle.github.io/vUSAlink/
+Live link: **https://vatflow.io/vusalink/**
+
+The previous GitHub Pages URL (`djbrombizzle.github.io/vUSAlink`) redirects there automatically.
 
 ---
 
@@ -27,9 +29,8 @@ Live link here https://djbrombizzle.github.io/vUSAlink/
 
 ## What a controller does
 
-1. Open the link.
-2. Settings opens automatically on the first visit — enter your **VATSIM CID** and save.
-   (The hub URL is pre-filled and hidden; there is nothing else to configure.)
+1. Open **https://vatflow.io/vusalink/**.
+2. **Sign in with VATSIM** (top bar) — your CID is taken from your VATSIM Connect session.
 3. Be **online controlling a center** on VATSIM (e.g. `JAX_CTR`). The hub identifies your
    sector from your live position.
 4. **Verify once:** a yellow bar shows a code like `VUSA-AB12`. Put that code anywhere in
