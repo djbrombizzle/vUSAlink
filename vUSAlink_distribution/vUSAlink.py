@@ -209,13 +209,14 @@ def get_boundaries():
     return out
 
 
-def get_vatspy():
-    """Return (airports, firs). Airports: {icao:{lat,lon,fir}}.
-       Firs: [{icao,name,prefix,boundary}]."""
-    now = time.time()
-    if _cache["apt"] and now - _cache["vatspy_ts"] < STATIC_TTL:
-        return _cache["apt"], _cache["fir"]
-    text = fetch_url(VATSPY_URL)
+def parse_vatspy_dat(text):
+    """Parse VATSpy.dat into (airports, firs).
+
+    Airports: {icao_or_prefix:{lat,lon,fir}}. Primary rows key by ICAO (KORD).
+    Alias rows (field 7 == 1) are indexed by callsign prefix so APP/DEP/TWR
+    sectors like CHI_XX_APP resolve — VATSpy maps CHI→KORD, SCT→KLAX, etc.
+    Handoff lookup uses K+3-letter prefix, so aliases also register as KCHI.
+    """
     airports, firs, section = {}, [], None
     for line in text.splitlines():
         line = line.strip()
@@ -225,17 +226,35 @@ def get_vatspy():
             section = line.strip("[]").upper(); continue
         p = line.split("|")
         if section == "AIRPORTS" and len(p) >= 6:
-            if len(p) >= 7 and p[6].strip() == "1":
-                continue
             try:
-                airports[p[0].strip().upper()] = {
-                    "lat": float(p[2]), "lon": float(p[3]), "fir": p[5].strip().upper()}
+                info = {"lat": float(p[2]), "lon": float(p[3]),
+                        "fir": p[5].strip().upper()}
             except ValueError:
-                pass
+                continue
+            icao = p[0].strip().upper()
+            is_alias = len(p) >= 7 and p[6].strip() == "1"
+            if not is_alias:
+                airports[icao] = info
+            else:
+                pref = p[4].strip().upper() if len(p) > 4 else ""
+                if pref:
+                    airports.setdefault(pref, info)
+                    if len(pref) == 3:
+                        airports.setdefault("K" + pref, info)
         elif section == "FIRS" and len(p) >= 4:
             firs.append({"icao": p[0].strip().upper(), "name": p[1].strip(),
                          "prefix": p[2].strip().upper(),
                          "boundary": (p[3].strip().upper() or p[0].strip().upper())})
+    return airports, firs
+
+
+def get_vatspy():
+    """Return (airports, firs). Airports: {icao:{lat,lon,fir}}.
+       Firs: [{icao,name,prefix,boundary}]."""
+    now = time.time()
+    if _cache["apt"] and now - _cache["vatspy_ts"] < STATIC_TTL:
+        return _cache["apt"], _cache["fir"]
+    airports, firs = parse_vatspy_dat(fetch_url(VATSPY_URL))
     _cache["apt"], _cache["fir"], _cache["vatspy_ts"] = airports, firs, now
     return airports, firs
 
